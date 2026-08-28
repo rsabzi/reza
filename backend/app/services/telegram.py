@@ -27,6 +27,10 @@ class TelegramError(RuntimeError):
     """Safe, redacted Telegram provider error."""
 
 
+class TelegramNetworkError(TelegramError):
+    """Telegram endpoints are unreachable from this server (network/TLS/timeout)."""
+
+
 def redact_text(value: str, secrets: tuple[str, ...] = ()) -> str:
     """Remove bot tokens / API keys from an error or response payload text."""
 
@@ -70,8 +74,12 @@ async def telegram_get_me_with_token(token: str, *, timeout: float = 10.0) -> di
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await asyncio.wait_for(client.post(url), timeout=timeout + 2.0)
         payload = response.json()
-    except (httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
+    except ValueError as exc:
         raise _redacted_error(exc, (token,)) from exc
+    except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        raise TelegramNetworkError(
+            redact_text(str(exc) or exc.__class__.__name__, (token,))
+        ) from exc
     if not payload.get("ok"):
         description = redact_text(str(payload.get("description") or payload), (token,))
         raise TelegramError(f"Telegram rejected the bot token: {description}")
@@ -102,8 +110,12 @@ async def telegram_send_message(
                 timeout=timeout + 2.0,
             )
         payload = response.json()
-    except (httpx.HTTPError, asyncio.TimeoutError, ValueError) as exc:
+    except ValueError as exc:
         raise _redacted_error(exc, (token,)) from exc
+    except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        raise TelegramNetworkError(
+            redact_text(str(exc) or exc.__class__.__name__, (token,))
+        ) from exc
     if not payload.get("ok"):
         description = redact_text(str(payload.get("description") or payload), (token,))
         raise TelegramError(f"Telegram sendMessage failed: {description}")

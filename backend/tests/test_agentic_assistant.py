@@ -956,3 +956,169 @@ async def test_widening_tool_policy_requires_approval(client, db):
     )
     assert direct.needs_approval is False
     assert direct.ok is True
+
+
+# ---------------------------------------------------------------------------
+# 19: Gemini key validation uses the real SDK surface (regression for `.aio.models`)
+# ---------------------------------------------------------------------------
+
+
+class FakeModel:
+    def __init__(self, name):
+        self.name = name
+
+
+class FakeAsyncPager:
+    def __init__(self, models):
+        self._models = list(models)
+
+    def __aiter__(self):
+        self._iter = iter(self._models)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class FakeModels:
+    """SDK-faithful async `models` namespace with scriptable failures."""
+
+    def __init__(self, *, list_models=(), list_error=None, get_error=None):
+        self.list_models = list(list_models)
+        self.list_error = list_error
+        self.get_error = get_error
+        self.list_called = False
+        self.get_calls: list[str] = []
+
+    async def list(self, config=None):
+        self.list_called = True
+        if self.list_error is not None:
+            raise self.list_error
+        return FakeAsyncPager(self.list_models)
+
+    async def get(self, model):
+        self.get_calls.append(model)
+        if self.get_error is not None:
+            raise self.get_error
+        return FakeModel(f"models/{model}")
+
+
+class FakeAsyncClient:
+    """Faithful to google-genai: the AsyncClient has `.models` but NO `.aio`."""
+
+    def __init__(self, models):
+        self.models = models
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class FakeClient:
+    """Faithful to google-genai 2.x: `Client(...).aio` is the AsyncClient itself."""
+
+    shared_models: FakeModels | None = None
+
+    def __init__(self, api_key=None, **kwargs):
+        self.api_key = api_key
+        # Stable instance: every `.aio` access must return the same AsyncClient,
+        # otherwise assertions on `list_called` would observe a fresh object.
+        self._aio = FakeAsyncClient(type(self).shared_models)
+
+    @property
+    def aio(self):
+        return self._aio
+
+
+def _install_fake_genai_client(monkeypatch, models: FakeModels):
+    import google.genai as genai_module
+
+    class BoundFakeClient(FakeClient):
+        shared_models = models
+
+    monkeypatch.setattr(genai_module, "Client", BoundFakeClient)
+    return BoundFakeClient
+
+
+async def test_gemini_validation_uses_models_list_not_aio(monkeypatch):
+    from backend.app.agent.ai_client import validate_gemini_api_key
+
+    models = FakeModels(
+        list_models=[FakeModel("models/gemini-3.7-flash"), FakeModel("models/embedding-001")]
+    )
+    _install_fake_genai_client(monkeypatch, models)
+
+    model, provider = await validate_gemini_api_key("valid-key-1234567890")
+
+    assert (model, provider) == ("gemini-3.7-flash", "api")
+    assert models.list_called is True
+    assert models.get_calls == []
+
+
+async def test_gemini_validation_classifies_invalid_key_and_network(monkeypatch):
+    import httpx
+    from google.genai import errors as genai_errors
+
+    from backend.app.agent.ai_client import (
+        GeminiInvalidKeyError,
+        GeminiNetworkError,
+        validate_gemini_api_key,
+    )
+
+    unauthorized = genai_errors.APIError(
+        401, {"error": {"message": "API key not valid", "status": "UNAUTHENTICATED"}}
+    )
+    _install_fake_genai_client(monkeypatch, FakeModels(list_error=unauthorized))
+    with pytest.raises(GeminiInvalidKeyError):
+        await validate_gemini_api_key("bad-key-1234567890")
+
+    _install_fake_genai_client(
+        monkeypatch, FakeModels(list_error=httpx.ConnectError("connection refused"))
+    )
+    with pytest.raises(GeminiNetworkError):
+        await validate_gemini_api_key("any-key-1234567890")
+
+
+async def test_gemini_validation_falls_back_to_models_get(monkeypatch):
+    from backend.app.agent.ai_client import validate_gemini_api_key
+
+    models = FakeModels(list_error=RuntimeError("listing models is not supported here"))
+    _install_fake_genai_client(monkeypatch, models)
+
+    model, provider = await validate_gemini_api_key("restricted-key-1234567890")
+
+    assert provider == "models"
+    assert model == "gemini-3.7-flash"
+    assert models.list_called is True
+    assert models.get_calls == ["gemini-3.7-flash"]
+
+
+async def test_settings_put_returns_503_for_network_and_400_for_bad_key(
+    client, monkeypatch, tmp_path
+):
+    from backend.app.agent.ai_client import GeminiInvalidKeyError, GeminiNetworkError
+
+    monkeypatch.setenv("AGENT_MASTER_KEY_FILE", str(tmp_path / "master.key"))
+
+    network_fail = AsyncMock(side_effect=GeminiNetworkError("unreachable"))
+    monkeypatch.setattr("backend.app.routes.settings.validate_gemini_api_key", network_fail)
+    response = await client.put(
+        "/api/settings/gemini", json={"api_key": "valid-but-offline-key-123456"}
+    )
+    assert response.status_code == 503, response.text
+    assert "دسترسی ندارد" in response.json()["detail"]
+    assert "valid-but-offline-key" not in response.text
+
+    invalid_fail = AsyncMock(side_effect=GeminiInvalidKeyError("rejected"))
+    monkeypatch.setattr("backend.app.routes.settings.validate_gemini_api_key", invalid_fail)
+    response = await client.put(
+        "/api/settings/gemini", json={"api_key": "definitely-bad-key-123456"}
+    )
+    assert response.status_code == 400, response.text
+    assert "رد کرد" in response.json()["detail"]
+    assert "definitely-bad-key" not in response.text
