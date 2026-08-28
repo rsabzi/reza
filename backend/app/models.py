@@ -49,6 +49,7 @@ class Task(TimestampMixin, Base):
     recurrence_rule: Mapped[str | None] = mapped_column(String(32))
     scheduled_time: Mapped[str | None] = mapped_column(String(5))
     last_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
     steps: Mapped[list[Step]] = relationship(
         back_populates="task", cascade="all, delete-orphan", order_by="Step.position"
@@ -303,6 +304,31 @@ class OutboundMessage(TimestampMixin, Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     contact_endpoint: Mapped[ContactEndpoint | None] = relationship()
+
+
+class DailyReport(TimestampMixin, Base):
+    """The user's end-of-day report for one local date (evening check-in)."""
+
+    __tablename__ = "daily_reports"
+    __table_args__: ClassVar[dict[str, bool]] = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_date: Mapped[str] = mapped_column(String(10), unique=True, nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AppNotification(TimestampMixin, Base):
+    """Server-pushed dashboard notification (daily brief, reminders, info)."""
+
+    __tablename__ = "app_notifications"
+    __table_args__: ClassVar[dict[str, bool]] = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    dedupe_key: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CustomTableDefinition(TimestampMixin, Base):

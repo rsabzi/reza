@@ -1310,3 +1310,45 @@ def queue_outbound_message(
     db.commit()
     db.refresh(message)
     return message
+
+
+# ---------------------------------------------------------------------------
+# Daily delivery plan
+# ---------------------------------------------------------------------------
+
+
+@register_tool(
+    "assign_daily_deadlines",
+    "Spread pending tasks without a deadline over consecutive days, one task "
+    "per day starting tomorrow (agent timezone). Returns the assignment list.",
+    requires_approval=False,
+)
+def assign_daily_deadlines_tool(context: ToolContext) -> dict[str, Any]:
+    from ..services.daily import assign_daily_deadlines as assign
+
+    assigned = assign(context.db)
+    return {
+        "assigned": assigned,
+        "count": len(assigned),
+        "message": (
+            f"{len(assigned)} تسک از فردا، روزی یکی زمان تحویل گرفت."
+            if assigned
+            else "تسک بدون زمان تحویلی باقی نمانده است."
+        ),
+    }
+
+
+@register_tool(
+    "submit_daily_report",
+    "Record the user's end-of-day work report for today (evening check-in).",
+    requires_approval=False,
+)
+def submit_daily_report_tool(context: ToolContext, content: str) -> dict[str, Any]:
+    from ..services.daily import save_daily_report
+
+    record = save_daily_report(context.db, content)
+    return {
+        "report_id": record.id,
+        "report_date": record.report_date,
+        "status": "saved",
+    }

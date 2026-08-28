@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { PersonalView } from "../components/PersonalView";
+import { DailyPlanCard } from "../components/DailyPlanCard";
 import { SalonView } from "../components/SalonView";
 import { SettingsPanel } from "../components/SettingsPanel";
 import { TaskDetail } from "../components/TaskDetail";
@@ -334,4 +335,116 @@ test("Settings panel lists rotating keys and removes a single slot", async () =>
     "کلید انتخاب‌شده از چرخش حذف شد",
     "success",
   );
+});
+
+test("Salon outreach draft preview shows the text inline", async () => {
+  const user = userEvent.setup();
+  const notify = vi.fn();
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (url, options) => {
+      if (
+        url === "/api/tools/generate_outreach_script/preview" &&
+        options?.method === "POST"
+      ) {
+        return response({
+          tool: "generate_outreach_script",
+          result: {
+            salon_id: 1,
+            script: "سلام سالن آزادی عزیز، پیشنهاد همکاری داریم.",
+          },
+        });
+      }
+      return response([]);
+    });
+  const salons = [
+    {
+      id: 1,
+      name: "سالن آزادی",
+      phone: "09120000111",
+      city: "تهران",
+      status: "lead",
+      tags: [],
+    },
+  ];
+  render(
+    <SalonView
+      salons={salons}
+      dailyPlan={[{ salon: salons[0], days_since_contact: null }]}
+      notify={notify}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: /ساخت متن پیگیری/ }));
+
+  const preview = await screen.findByTestId("draft-preview-text");
+  expect(preview).toHaveTextContent("سلام سالن آزادی عزیز");
+  // The old flow created a task and navigated away; a preview creates nothing.
+  const calls = fetchMock.mock.calls.map(([url]) => url);
+  expect(calls).not.toContain("/api/tasks");
+});
+
+test("Daily plan card assigns deadlines and submits the evening report", async () => {
+  const user = userEvent.setup();
+  const notify = vi.fn();
+  const plan = {
+    settings: {
+      enabled: true,
+      morning_time: "08:00",
+      evening_time: "21:00",
+      timezone: "Asia/Tehran",
+    },
+    today: [{ id: 7, title: "تماس با سالن نمونه", status: "pending" }],
+    unscheduled_count: 2,
+    report_today: null,
+  };
+  const calls = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+    calls.push([url, options]);
+    if (url === "/api/daily/plan") return response(plan);
+    if (url === "/api/daily/deadlines/assign" && options?.method === "POST")
+      return response({
+        assigned: [{ task_id: 1, due_date: "2026-08-29" }],
+        count: 1,
+      });
+    if (url === "/api/daily/report" && options?.method === "POST")
+      return response({
+        id: 1,
+        report_date: "2026-08-28",
+        content: "دو تسک تمام شد",
+      });
+    return response(plan);
+  });
+
+  render(<DailyPlanCard notify={notify} />);
+
+  expect(await screen.findByTestId("daily-plan-card")).toHaveTextContent(
+    "تماس با سالن نمونه",
+  );
+
+  await user.click(screen.getByTestId("assign-deadlines"));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        ([url, options]) =>
+          url === "/api/daily/deadlines/assign" && options?.method === "POST",
+      ),
+    ).toBe(true),
+  );
+  expect(notify).toHaveBeenCalledWith(
+    "۱ تسک از فردا، روزی یکی زمان تحویل گرفت",
+    "success",
+  );
+
+  await user.type(screen.getByLabelText("گزارش شبانه"), "دو تسک تمام شد");
+  await user.click(screen.getByTestId("submit-report"));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        ([url, options]) =>
+          url === "/api/daily/report" && options?.method === "POST",
+      ),
+    ).toBe(true),
+  );
+  expect(notify).toHaveBeenCalledWith("گزارش امروز ثبت شد", "success");
 });

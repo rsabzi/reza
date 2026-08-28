@@ -41,6 +41,34 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_all() -> None:
-    """Create every model table imported by the application."""
+    """Create every model table and add columns introduced after first deploy."""
 
     Base.metadata.create_all(bind=engine)
+    _ensure_sqlite_columns(
+        {
+            "tasks": {"due_at": "DATETIME"},
+        }
+    )
+
+
+def _ensure_sqlite_columns(columns_by_table: dict[str, dict[str, str]]) -> None:
+    """ALTER TABLE ... ADD COLUMN for models added to existing installs.
+
+    ``create_all`` only creates missing tables; SQLite has no built-in
+    migration, so columns added after the first deployment are appended here.
+    """
+
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        for table_name, columns in columns_by_table.items():
+            existing = {
+                row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table_name})")
+            }
+            if not existing:
+                continue  # table absent (fresh create_all already made it)
+            for column_name, column_type in columns.items():
+                if column_name not in existing:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                    )

@@ -21,7 +21,9 @@ from .routes import (
     assistant,
     contacts,
     custom_schema,
+    daily,
     memory,
+    notifications,
     outbound,
     scheduler,
     settings,
@@ -68,6 +70,8 @@ app.include_router(system.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(salon_routes.router, prefix="/api")
 app.include_router(personal_routes.router, prefix="/api")
+app.include_router(daily.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")
 
 
 @app.get("/api/health", tags=["system"])

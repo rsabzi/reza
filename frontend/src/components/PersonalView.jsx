@@ -21,6 +21,7 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
 import { ConfirmDialog, Dialog } from "./ui/dialog";
 import { Field, Input, Select, Textarea } from "./ui/input";
+import { DraftPreviewDialog } from "./DraftPreviewDialog";
 import { EmptyState } from "./EmptyState";
 import { PanelTitle } from "./PanelTitle";
 
@@ -59,6 +60,13 @@ export function PersonalView({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(null);
+  const [draft, setDraft] = useState({
+    open: false,
+    title: "",
+    text: "",
+    loading: false,
+    error: "",
+  });
   const [error, setError] = useState("");
 
   const visible = useMemo(
@@ -140,32 +148,33 @@ export function PersonalView({
   }
 
   async function draftProposal(project) {
-    setBusy(`draft-${project.id}`);
+    setDraft({
+      open: true,
+      title: `پروپوزال ${project.title}`,
+      text: "",
+      loading: true,
+      error: "",
+    });
     try {
-      const task = await api.createTask({
+      const preview = await api.previewTool("draft_project_proposal", {
+        project_id: project.id,
+        approach: project.next_action || "تحویل مرحله‌ای و شفاف",
+      });
+      setDraft({
+        open: true,
         title: `پروپوزال ${project.title}`,
-        description: `پیش‌نویس برای ${project.client_name || "پروژه شخصی"}`,
-        module_name: "personal",
+        text: preview?.result?.proposal || "",
+        loading: false,
+        error: "",
       });
-      const step = await api.invokeTool("draft_project_proposal", {
-        task_id: task.id,
-        title: `بازبینی پروپوزال ${project.title}`,
-        arguments: {
-          project_id: project.id,
-          approach: project.next_action || "تحویل مرحله‌ای و شفاف",
-        },
-      });
-      await onTaskCreated(task, step);
-      notify(
-        step.status === "needs_approval"
-          ? "پیش‌نویس به صف تأیید اضافه شد"
-          : "پروپوزال تولید شد",
-        "success",
-      );
     } catch (reason) {
-      notify(reason.message, "error");
-    } finally {
-      setBusy(null);
+      setDraft({
+        open: true,
+        title: `پروپوزال ${project.title}`,
+        text: "",
+        loading: false,
+        error: reason.message,
+      });
     }
   }
 
@@ -381,6 +390,24 @@ export function PersonalView({
         onStatus={(status) => changeStatus(viewing, status)}
         onDraft={() => draftProposal(viewing)}
       />
+      <DraftPreviewDialog
+        open={draft.open}
+        title={draft.title}
+        text={draft.text}
+        loading={draft.loading}
+        error={draft.error}
+        onClose={() =>
+          setDraft({
+            open: false,
+            title: "",
+            text: "",
+            loading: false,
+            error: "",
+          })
+        }
+        onCopy={() => notify("متن پروپوزال کپی شد", "success")}
+      />
+
       <ConfirmDialog
         open={Boolean(deleting)}
         onClose={() => setDeleting(null)}

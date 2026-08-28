@@ -41,6 +41,8 @@ ACTION_LABELS = {
     "create_custom_table": "ساخت جدول سفارشی",
     "prepare_report_view": "آماده‌سازی نمای گزارش",
     "list_custom_schema": "گزارش‌های سفارشی",
+    "assign_daily_deadlines": "زمان‌بندی تحویل روزانه",
+    "submit_daily_report": "ثبت گزارش شبانه",
 }
 
 
