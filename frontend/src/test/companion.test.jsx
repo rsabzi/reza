@@ -358,3 +358,53 @@ test("telegram token flow saves with getMe and shows provider receipt in outboun
   const note = screen.getByTestId("telegram-status-note");
   expect(note).toBeInTheDocument();
 });
+
+test("Gemini model preference can be changed from settings", async () => {
+  const user = userEvent.setup();
+  const fetchMock = mockApi([
+    [
+      "GET /api/settings/telegram",
+      () => response({ configured: false, source: "none", hint: null }),
+    ],
+    ["GET /api/contacts", () => response([])],
+    ["GET /api/outbound-messages", () => response([])],
+    [
+      "PUT /api/settings/gemini/model",
+      () =>
+        response({
+          configured: true,
+          source: "dashboard",
+          hint: "••••9876",
+          validated: true,
+          model: "gemini-3.6-flash",
+          models: ["gemini-3.7-flash", "gemini-3.6-flash"],
+        }),
+    ],
+  ]);
+  render(
+    <AssistantConnections
+      status={{
+        gemini_configured: true,
+        reasoning_model: "gemini-3.7-flash",
+        default_model: "gemini-3.7-flash",
+        supported_models: ["gemini-3.7-flash", "gemini-3.6-flash"],
+      }}
+      onStatusChanged={vi.fn().mockResolvedValue(undefined)}
+      notify={vi.fn()}
+    />,
+  );
+  await user.selectOptions(
+    screen.getByLabelText("مدل Gemini"),
+    "gemini-3.6-flash",
+  );
+  await user.click(screen.getByRole("button", { name: /ذخیره مدل/ }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings/gemini/model",
+      expect.objectContaining({
+        method: "PUT",
+        body: expect.stringContaining("gemini-3.6-flash"),
+      }),
+    ),
+  );
+});

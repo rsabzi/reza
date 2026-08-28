@@ -95,6 +95,8 @@ def is_transient_error(exc: Exception) -> bool:
     try:
         from google.genai import errors
 
+        if isinstance(exc, errors.APIError) and (exc.code in {408, 429} or (exc.code or 0) >= 500):
+            return True
         if isinstance(exc, errors.ClientError) and exc.code in {429, 408}:
             return True
         if isinstance(exc, errors.ServerError):
@@ -324,9 +326,7 @@ async def list_available_models(api_key: str) -> list[str]:
     from google.genai import types
 
     async with genai.Client(api_key=api_key).aio as client:
-        pager = await client.aio.models.list(
-            config=types.ListModelsConfig(page_size=100, filter="")
-        )
+        pager = await client.aio.models.list(config=types.ListModelsConfig(page_size=100))
         names: list[str] = []
         async for model in pager:
             name = getattr(model, "name", None) or ""

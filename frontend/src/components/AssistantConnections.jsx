@@ -191,13 +191,14 @@ export function AssistantConnections({
               value={model}
               onChange={(event) => setModel(event.target.value)}
             >
-              {(status.supported_models || [status.default_model]).map(
-                (name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ),
-              )}
+              {(status.supported_models?.length
+                ? status.supported_models
+                : [status.default_model || "gemini-3.7-flash"]
+              ).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
             </Select>
             <Button
               size="sm"

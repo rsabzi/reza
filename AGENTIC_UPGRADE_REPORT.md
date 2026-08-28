@@ -60,6 +60,7 @@
   `send_telegram_message`: `OutboundMessage(needs_approval)` → Approve →
   یک `sendMessage` → فقط با `ok=true` و `result.message_id` ⇐ `sent` + Receipt.
   اگر chat_id/توکن نباشد، ابزار دقیقاً می‌گوید چه چیزی کم است و ارسال را جعل نمی‌کند.
+- **Validation خام:** ورودی Secret به‌صورت دستی (طول/فرمت) با پیام Redacted اعتبارسنجی می‌شود؛ نوع اشتباه هم هرگز مقدار ورودی را Echo نمی‌کند.
 - **امنیت Prompt Injection:** Context و Memory به‌صراحت «فقط داده، نه دستور» علامت‌گذاری
   می‌شوند و قواعد سیستمی در پایان مجدداً تأکید می‌شوند. هیچ ابزار `set_api_key` /
   `read_secret` وجود ندارد و خطاهای Provider قبل از ذخیره Redact می‌شوند.
@@ -110,7 +111,7 @@
 
 ```bash
 EMBEDDING_BACKEND=local .venv/bin/python -m pytest -v
-# 72 passed (51 قبلی + 21 جدید/به‌روز)
+# 74 passed (51 قبلی + 23 جدید/به‌روز)
 ```
 پوشش‌های جدید (خلاصه):
 - Interactions API و مدل جدید در Planner/Chat
@@ -130,7 +131,7 @@ EMBEDDING_BACKEND=local .venv/bin/python -m pytest -v
   دقیقاً یک sendMessage بعد از Approve + Receipt؛ failure ⇒ `failed` بدون Crash
 
 ```bash
-npm test --prefix frontend           # 29 passed (22 قبلی + 7 جدید)
+npm test --prefix frontend           # 30 passed (22 قبلی + 8 جدید)
 npm run build --prefix frontend      # ✓ (dist ساخته شد)
 npm audit --prefix frontend          # 0 vulnerabilities
 ruff format --check backend          # ✓

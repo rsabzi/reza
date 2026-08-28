@@ -895,3 +895,64 @@ async def test_chat_endpoint_full_tool_round(client, db, monkeypatch, tmp_path):
     assert runs[0]["provider_call_id"] == "api-call-1"
     assert runs[0]["status"] == "done"
     assert len(detail.json()["messages"]) == 2
+
+
+async def test_validation_errors_never_echo_raw_secret(client):
+    """Wrong-type secret inputs must not leak the submitted value back."""
+
+    raw = "SUPER-SECRET-TOKEN-1234567890-ABCDEF"
+    telegram = await client.put("/api/settings/telegram", json={"bot_token": [raw]})
+    assert telegram.status_code == 422
+    assert raw not in telegram.text
+
+    gemini = await client.put("/api/settings/gemini", json={"api_key": [raw]})
+    assert gemini.status_code == 422
+    assert raw not in gemini.text
+
+    too_long = await client.put("/api/settings/telegram", json={"bot_token": "x" * 400})
+    assert too_long.status_code == 422
+    assert "x" * 400 not in too_long.text
+
+
+async def test_widening_tool_policy_requires_approval(client, db):
+    """Re-enabling a tool / removing its approval gate needs user confirmation."""
+
+    from backend.app.services.permissions import sync_registered_tools
+
+    sync_registered_tools(db)
+    tool = db.scalar(select(Tool).where(Tool.name == "echo"))
+    assert tool is not None
+    tool.enabled = False
+    db.commit()
+    conversation = await _conversation(db)
+
+    # Widening (enable a disabled tool) -> must pause at approval.
+    outcome = await execute_action(
+        db,
+        conversation_id=conversation.id,
+        message_id=None,
+        provider_call_id="widen-1",
+        action_name="set_tool_policy",
+        arguments={"tool_name": "echo", "enabled": True},
+    )
+    assert outcome.needs_approval is True
+    assert db.scalar(select(Tool).where(Tool.name == "echo")).enabled is False
+    step = db.scalar(select(Step).where(Step.tool_name == "set_tool_policy"))
+    approved = await client.post(f"/api/steps/{step.id}/approve")
+    assert approved.status_code == 200, approved.text
+    db.expunge(tool)
+    assert db.scalar(select(Tool).where(Tool.name == "echo")).enabled is True
+
+    # Restrictive change (disable) still executes directly, no approval needed.
+    db.scalar(select(Tool).where(Tool.name == "echo")).enabled = True
+    db.commit()
+    direct = await execute_action(
+        db,
+        conversation_id=conversation.id,
+        message_id=None,
+        provider_call_id="restrict-1",
+        action_name="set_tool_policy",
+        arguments={"tool_name": "echo", "enabled": False},
+    )
+    assert direct.needs_approval is False
+    assert direct.ok is True

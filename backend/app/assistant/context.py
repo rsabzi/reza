@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from ..memory.store import search_memory
 from ..models import (
     AgentActionRun,
     AgentConversation,
@@ -47,7 +48,7 @@ def build_system_instruction(db: Session) -> str:
     )
 
 
-def _build_runtime_context(db: Session) -> dict[str, Any]:
+def _build_runtime_context(db: Session, query: str = "") -> dict[str, Any]:
     """Small real snapshot; never dump the whole database into the prompt."""
 
     active_tasks = list(
@@ -73,9 +74,13 @@ def _build_runtime_context(db: Session) -> dict[str, Any]:
     reminders = daily_personal_reminder(
         db, within_days=resolved_reminder_window_days(db, REMINDER_WINDOW_DAYS)
     )
-    memories = list(
-        db.scalars(select(MemoryEntry).order_by(MemoryEntry.created_at.desc()).limit(5))
-    )
+    if query.strip():
+        memories = search_memory(db, query.strip(), limit=5)
+        memories = [item.entry for item in memories]
+    else:
+        memories = list(
+            db.scalars(select(MemoryEntry).order_by(MemoryEntry.created_at.desc()).limit(5))
+        )
     sync_registered_tools(db)
     policies = list(db.scalars(select(Tool).order_by(Tool.name)))
     return {
@@ -171,5 +176,5 @@ def build_history(
     return history
 
 
-def serialize_runtime_context(db: Session) -> str:
-    return json.dumps(_build_runtime_context(db), ensure_ascii=False, default=str)
+def serialize_runtime_context(db: Session, query: str = "") -> str:
+    return json.dumps(_build_runtime_context(db, query), ensure_ascii=False, default=str)

@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import AgentActionRun, Step, Task, utcnow
+from ..models import AgentActionRun, Step, Task, Tool, utcnow
 from ..services.permissions import ToolDisabledError, ToolNotFoundError, get_tool_record
 from ..services.secrets import GEMINI_SECRET_KEY, TELEGRAM_SECRET_KEY, get_secret
 from ..tools.registry import ToolContext, call_tool, validate_tool_arguments
@@ -141,6 +141,24 @@ def _duplicate_outcome(
     )
 
 
+def _policy_change_widens_access(db: Session, action_name: str, arguments: dict[str, Any]) -> bool:
+    """Widening tool permissions require user approval (defence in depth)."""
+
+    if action_name != "set_tool_policy":
+        return False
+    tool_name = str(arguments.get("tool_name") or "")
+    if not tool_name:
+        return False
+    record = db.scalar(select(Tool).where(Tool.name == tool_name))
+    if record is None:
+        return False
+    enabled = arguments.get("enabled")
+    requires_approval = arguments.get("requires_approval")
+    if enabled is True and not record.enabled:
+        return True
+    return requires_approval is False and record.requires_approval
+
+
 async def execute_action(
     db: Session,
     *,
@@ -223,7 +241,11 @@ async def execute_action(
     db.add(run)
     db.flush()
 
-    if policy.requires_approval:
+    requires_approval = policy.requires_approval or _policy_change_widens_access(
+        db, action_name, dict(arguments or {})
+    )
+
+    if requires_approval:
         # Pre-register external artifacts so nothing is sent before approval.
         if action_name == "send_telegram_message":
             try:

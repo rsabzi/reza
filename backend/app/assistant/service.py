@@ -51,9 +51,12 @@ def _log_attempt(
         task_id=None,
         operation=operation,
         model=model,
-        prompt=(
-            f"[assistant conversation={conversation_id}]"
-            f" user: {user_text[:600]}\nsystem: {system_instruction[:1500]}"
+        prompt=redact_secrets(
+            db,
+            (
+                f"[assistant conversation={conversation_id}]"
+                f" user: {user_text[:600]}\nsystem: {system_instruction[:1500]}"
+            ),
         ),
         response=response.output_text[:4000] if response is not None else None,
         error=redact_secrets(db, str(error)) if error is not None else None,
@@ -125,7 +128,7 @@ async def run_chat_turn(
     db.refresh(user_message)
 
     system_instruction = build_system_instruction(db)
-    runtime_context = serialize_runtime_context(db)
+    runtime_context = serialize_runtime_context(db, normalized)
     provider_history = _history_for_model(build_history(db, conversation), runtime_context)
 
     actions: list[dict[str, Any]] = []

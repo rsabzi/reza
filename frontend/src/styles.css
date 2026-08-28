@@ -152,12 +152,6 @@ input[type="time"] {
   }
 }
 
-@media (max-width: 1023px) {
-  .chat-composer-safe {
-    padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
-  }
-}
-
 html,
 body {
   overflow-x: hidden;

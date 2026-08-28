@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..agent.ai_client import (
@@ -38,7 +40,9 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 class GeminiKeyInput(BaseModel):
-    api_key: SecretStr
+    # `Any` + manual redacted validation: Pydantic errors must never echo the
+    # submitted secret value back to the client.
+    api_key: Any
 
 
 class GeminiModelInput(BaseModel):
@@ -55,7 +59,8 @@ class GeminiSettingStatus(BaseModel):
 
 
 class TelegramTokenInput(BaseModel):
-    bot_token: SecretStr
+    # `Any` + manual redacted validation (see GeminiKeyInput).
+    bot_token: Any
 
 
 class TelegramSettingStatus(BaseModel):
@@ -106,7 +111,9 @@ async def save_gemini_setting(
     payload: GeminiKeyInput,
     db: Session = Depends(get_db),
 ) -> GeminiSettingStatus:
-    api_key = payload.api_key.get_secret_value().strip()
+    if not isinstance(payload.api_key, str):
+        raise HTTPException(status_code=422, detail="Gemini API key must be a string")
+    api_key = payload.api_key.strip()
     if not 10 <= len(api_key) <= 500:
         raise HTTPException(status_code=422, detail="Gemini API key length is invalid")
     try:
@@ -201,7 +208,9 @@ async def save_telegram_setting(
     payload: TelegramTokenInput,
     db: Session = Depends(get_db),
 ) -> TelegramSettingStatus:
-    raw = payload.bot_token.get_secret_value().strip()
+    if not isinstance(payload.bot_token, str):
+        raise HTTPException(status_code=422, detail="Telegram bot token must be a string")
+    raw = payload.bot_token.strip()
     if not (20 <= len(raw) <= 300):
         raise HTTPException(status_code=422, detail="Telegram bot token length is invalid")
     try:
