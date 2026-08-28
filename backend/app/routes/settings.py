@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from ..agent.ai_client import (
     SUPPORTED_MODEL_CANDIDATES,
+    GeminiInvalidKeyError,
+    GeminiNetworkError,
+    ModelUnavailableError,
     default_model_from_env,
 )
 from ..database import get_db
@@ -32,6 +35,7 @@ from ..services.secrets import (
 )
 from ..services.telegram import (
     TelegramError,
+    TelegramNetworkError,
     telegram_get_me_with_token,
     validate_bot_token,
 )
@@ -123,6 +127,19 @@ async def save_gemini_setting(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Google Gemini did not respond in time; the key was not saved",
         ) from exc
+    except GeminiInvalidKeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google این کلید را رد کرد؛ کلید Gemini را بررسی کنید (the key was not saved)",
+        ) from exc
+    except (GeminiNetworkError, ModelUnavailableError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "سرور فعلی به سرویس Google دسترسی ندارد (شبکه/TLS/proxy)؛ "
+                "اتصال سرور را بررسی کنید (the key was not saved)"
+            ),
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -172,6 +189,16 @@ async def test_gemini_setting(db: Session = Depends(get_db)) -> GeminiSettingSta
         await validate_gemini_api_key(api_key)
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail="Google Gemini validation timed out") from exc
+    except GeminiInvalidKeyError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Google این کلید را رد کرد؛ کلید ذخیرهشده معتبر نیست",
+        ) from exc
+    except (GeminiNetworkError, ModelUnavailableError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="سرور فعلی به سرویس Google دسترسی ندارد (شبکه/TLS/proxy)",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail="The configured Gemini key was rejected"
@@ -219,6 +246,11 @@ async def save_telegram_setting(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         await telegram_get_me_with_token(raw)
+    except TelegramNetworkError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram از این سرور در دسترس نیست (شبکه/TLS/proxy)؛ توکن ذخیره نشد",
+        ) from exc
     except TelegramError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TimeoutError as exc:
@@ -247,6 +279,11 @@ async def test_telegram_setting(db: Session = Depends(get_db)) -> TelegramSettin
         raise HTTPException(status_code=409, detail="Telegram bot token is not configured")
     try:
         await telegram_get_me_with_token(token)
+    except TelegramNetworkError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram از این سرور در دسترس نیست (شبکه/TLS/proxy)",
+        ) from exc
     except TelegramError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TimeoutError as exc:
