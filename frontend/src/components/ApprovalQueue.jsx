@@ -14,7 +14,7 @@ import { api } from "../lib/api";
 import { faDate, faNumber, toolLabels } from "../lib/format";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
-import { ConfirmDialog } from "./ui/dialog";
+import { ConfirmDialog, Dialog } from "./ui/dialog";
 import { EmptyState } from "./EmptyState";
 import { PanelTitle } from "./PanelTitle";
 
@@ -32,17 +32,53 @@ export function ApprovalQueue({
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState("");
   const [rejecting, setRejecting] = useState(null);
+  // Outputs of the just-approved action, shown immediately in a dialog:
+  // { title, error, entries: [{ id, title, text, json }] }
+  const [resultView, setResultView] = useState(null);
+
+  function collectOutputs(updatedTask, approvedStepId, startedAt) {
+    const approved = (updatedTask.steps || []).find(
+      (item) => item.id === approvedStepId,
+    );
+    const entries = [];
+    for (const step of updatedTask.steps || []) {
+      if (step.result == null) continue;
+      const isApproved = step.id === approvedStepId;
+      // Older results from previous runs are still reachable in task detail;
+      // here we surface the approved step plus everything executed with it.
+      const ranInThisApproval = new Date(step.updated_at) >= startedAt;
+      if (!isApproved && !ranInThisApproval) continue;
+      entries.push({
+        id: step.id,
+        title: step.title,
+        result: step.result,
+      });
+    }
+    return {
+      title: approved?.title || "اقدام تأییدشده",
+      error:
+        approved?.status === "failed"
+          ? approved.error || "اجرا با خطا مواجه شد"
+          : null,
+      entries,
+    };
+  }
 
   async function decide(step, action) {
     setBusyId(step.id);
     setError("");
+    const startedAt = new Date(Date.now() - 1000);
     try {
       const updatedTask =
         action === "approve"
           ? await api.approveStep(step.id)
           : await api.rejectStep(step.id);
-      if (action === "approve") onApproved(step, updatedTask);
-      else onRejected(step, updatedTask);
+      if (action === "approve") {
+        setResultView(collectOutputs(updatedTask, step.id, startedAt));
+        onApproved(step, updatedTask);
+      } else {
+        onRejected(step, updatedTask);
+      }
       setRejecting(null);
     } catch (reason) {
       setError(reason.message);
@@ -180,7 +216,115 @@ export function ApprovalQueue({
         description="با رد کردن، این قدم و تسک مربوطه لغو می‌شوند و قدم‌های بعدی اجرا نخواهند شد."
         confirmLabel="بله، رد شود"
       />
+      <ApprovalResultDialog
+        view={resultView}
+        onClose={() => setResultView(null)}
+      />
     </div>
+  );
+}
+
+/** Prefer human-readable text fields of a tool result over raw JSON. */
+const TEXT_FIELDS = [
+  "script",
+  "proposal",
+  "content",
+  "message",
+  "text",
+  "summary",
+];
+
+function readableResult(result) {
+  if (typeof result === "string") {
+    return result.trim() ? result : null;
+  }
+  if (result && typeof result === "object") {
+    for (const key of TEXT_FIELDS) {
+      const value = result[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+  return null;
+}
+
+function ApprovalResultDialog({ view, onClose }) {
+  const [copied, setCopied] = useState(false);
+  if (!view) return null;
+
+  const plainText = view.entries
+    .map(
+      (entry) =>
+        readableResult(entry.result) ?? JSON.stringify(entry.result, null, 2),
+    )
+    .join("\n\n---\n\n");
+
+  async function copyAll() {
+    await navigator.clipboard?.writeText(plainText);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`نتیجه اجرا: ${view.title}`}
+      description={
+        view.entries.length > 0
+          ? "خروجی اقدام تأییدشده آماده استفاده است."
+          : undefined
+      }
+      size="md"
+    >
+      <div
+        className="space-y-4 px-5 py-5 sm:px-6"
+        data-testid="approval-result"
+      >
+        {view.error && (
+          <p
+            className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-xs leading-6 text-rose-300"
+            role="alert"
+          >
+            {view.error}
+          </p>
+        )}
+        {view.entries.length === 0 && !view.error && (
+          <p className="py-6 text-center text-xs text-slate-500">
+            اقدام اجرا شد ولی خروجی متنی برنگرداند؛ وضعیت آن در جزئیات تسک قابل
+            مشاهده است.
+          </p>
+        )}
+        {view.entries.map((entry) => {
+          const text = readableResult(entry.result);
+          return (
+            <div key={entry.id || entry.title}>
+              {view.entries.length > 1 && (
+                <p className="mb-2 text-[11px] font-medium text-slate-400">
+                  {entry.title}
+                </p>
+              )}
+              <p
+                className="whitespace-pre-line rounded-xl border border-line bg-background/60 p-4 text-[13px] leading-8 text-slate-200"
+                data-testid="approval-result-text"
+              >
+                {text ?? JSON.stringify(entry.result, null, 2)}
+              </p>
+            </div>
+          );
+        })}
+        {view.entries.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] text-slate-600">
+              همین خروجی در «جزئیات تسک» هم ذخیره شده است.
+            </p>
+            <Button size="sm" variant="outline" onClick={copyAll}>
+              {copied ? <Check size={14} /> : <ArrowLeft size={14} />}
+              {copied ? "کپی شد" : "کپی خروجی"}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Dialog>
   );
 }
 
