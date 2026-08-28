@@ -11,9 +11,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..memory.chunking import chunk_playbook
 from ..memory.embedder import EmbeddingError
-from ..memory.store import add_memory, search_memory
+from ..memory.store import search_memory
 from ..models import MemoryEntry, Playbook
 
 router = APIRouter(tags=["memory"])
@@ -64,36 +63,29 @@ class MemorySearchRead(MemoryRead):
 
 @router.post("/playbooks", response_model=PlaybookRead, status_code=status.HTTP_201_CREATED)
 def upload_playbook(payload: PlaybookCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
-    playbook = Playbook(
-        title=payload.title, content=payload.content, module_name=payload.module_name
-    )
-    db.add(playbook)
-    db.flush()
-    chunks = chunk_playbook(payload.content, max_chars=payload.chunk_size)
+    from ..memory.store import create_playbook_with_chunks
+
     try:
-        for index, chunk in enumerate(chunks):
-            add_memory(
-                db,
-                content=chunk,
-                source="playbook",
-                source_id=str(playbook.id),
-                module_name=payload.module_name,
-                metadata={
-                    "playbook_id": playbook.id,
-                    "chunk_index": index,
-                    "title": playbook.title,
-                },
-                commit=False,
-            )
-        db.commit()
+        playbook = create_playbook_with_chunks(
+            db,
+            title=payload.title,
+            content=payload.content,
+            module_name=payload.module_name,
+            chunk_size=payload.chunk_size,
+        )
     except (EmbeddingError, ValueError) as exc:
         db.rollback()
         raise HTTPException(status_code=502, detail=f"Playbook embedding failed: {exc}") from exc
-    db.refresh(playbook)
-    return {
-        **PlaybookRead.model_validate(playbook).model_dump(),
-        "chunk_count": len(chunks),
-    }
+    count = (
+        db.scalar(
+            select(func.count(MemoryEntry.id)).where(
+                MemoryEntry.source == "playbook",
+                MemoryEntry.source_id == str(playbook.id),
+            )
+        )
+        or 0
+    )
+    return {**PlaybookRead.model_validate(playbook).model_dump(), "chunk_count": count}
 
 
 @router.get("/playbooks", response_model=list[PlaybookRead])

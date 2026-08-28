@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..memory.store import search_memory
 from ..models import AILog, Step, Task
 from ..tools.registry import list_registered_tools
-from .ai_client import AI_MODEL, AIClient
+from .ai_client import DEFAULT_GEMINI_MODEL, ChatClient
 
 
 class PlanningError(RuntimeError):
@@ -93,7 +93,7 @@ def _build_prompt(task: Task, memories: list[str]) -> str:
 async def decompose_task(
     db: Session,
     task: Task,
-    ai_client: AIClient,
+    ai_client: ChatClient,
     *,
     max_attempts: int = 3,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -105,22 +105,32 @@ async def decompose_task(
     memory_results = search_memory(db, f"{task.title} {task.description or ''}", limit=5)
     prompt = _build_prompt(task, [item.entry.content for item in memory_results])
     last_error: Exception | None = None
+    provider_attempts = 0
 
-    for attempt in range(1, max_attempts + 1):
+    def log_attempt(**kwargs: Any) -> None:
+        nonlocal provider_attempts
+        provider_attempts += 1
+        attempt_number = provider_attempts
         log = AILog(
             task_id=task.id,
-            operation="decompose_task",
-            model=getattr(ai_client, "model", AI_MODEL),
+            operation=kwargs.get("operation", "decompose_task"),
+            model=kwargs.get("model") or getattr(ai_client, "model", DEFAULT_GEMINI_MODEL),
             prompt=prompt,
-            attempt=attempt,
+            response=kwargs["response"].output_text if kwargs.get("response") else None,
+            error=(
+                str(kwargs["error"]) or kwargs["error"].__class__.__name__
+                if kwargs.get("error")
+                else None
+            ),
+            attempt=attempt_number,
         )
         db.add(log)
+        db.commit()
+
+    for attempt in range(1, max_attempts + 1):
         try:
-            raw_response = await ai_client.generate(prompt)
-            log.response = (
-                raw_response
-                if isinstance(raw_response, str)
-                else json.dumps(raw_response, ensure_ascii=False)
+            raw_response = await ai_client.generate(
+                prompt, operation="decompose_task", log_attempt=log_attempt
             )
             plan = parse_plan_response(raw_response)
             db.commit()  # persist the successful AI call before materializing its plan
@@ -149,9 +159,13 @@ async def decompose_task(
             return steps
         except Exception as exc:
             last_error = exc
-            if log.id is None or log.response is None:
-                log.error = str(exc) or exc.__class__.__name__
-                db.commit()
+            from .ai_client import AIConfigurationError, AIProviderError
+
+            if isinstance(exc, AIConfigurationError):
+                raise
+            # Provider fallback/backoff is handled inside the client; do not re-run it.
+            if isinstance(exc, AIProviderError):
+                raise PlanningError(str(exc)) from exc
             # Parsing errors also retry: models occasionally wrap or truncate JSON.
             if attempt < max_attempts:
                 await sleep(0.25 * (2 ** (attempt - 1)))

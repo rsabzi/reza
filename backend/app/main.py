@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .assistant import tools as _assistant_tools  # noqa: F401
+from .custom_schema import sync_custom_schema
 from .database import create_all
 from .modules.personal import models as _personal_models  # noqa: F401
 from .modules.personal import routes as personal_routes
@@ -14,7 +16,20 @@ from .modules.personal import tools as _personal_tools  # noqa: F401
 from .modules.salon import models as _salon_models  # noqa: F401
 from .modules.salon import routes as salon_routes
 from .modules.salon import tools as _salon_tools  # noqa: F401
-from .routes import agent, memory, scheduler, settings, steps, system, tasks, tools
+from .routes import (
+    agent,
+    assistant,
+    contacts,
+    custom_schema,
+    memory,
+    outbound,
+    scheduler,
+    settings,
+    steps,
+    system,
+    tasks,
+    tools,
+)
 from .scheduler import start_scheduler, stop_scheduler
 from .tools import builtin as _builtin_tools  # noqa: F401
 
@@ -22,6 +37,7 @@ from .tools import builtin as _builtin_tools  # noqa: F401
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     create_all()
+    sync_custom_schema()
     start_scheduler()
     try:
         yield
@@ -43,6 +59,10 @@ app.include_router(steps.router, prefix="/api")
 app.include_router(tools.router, prefix="/api")
 app.include_router(memory.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
+app.include_router(assistant.router, prefix="/api")
+app.include_router(contacts.router, prefix="/api")
+app.include_router(custom_schema.router, prefix="/api")
+app.include_router(outbound.router, prefix="/api")
 app.include_router(scheduler.router, prefix="/api")
 app.include_router(system.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")

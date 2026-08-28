@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import MemoryEntry, Step
+from ..models import MemoryEntry, Playbook, Step
 from . import embedder
 
 
@@ -87,6 +87,41 @@ def search_memory(
     ]
     ranked.sort(key=lambda item: (item.score, item.entry.id), reverse=True)
     return ranked[:limit]
+
+
+def create_playbook_with_chunks(
+    db: Session,
+    *,
+    title: str,
+    content: str,
+    module_name: str | None = None,
+    chunk_size: int = 800,
+) -> Playbook:
+    """Persist a playbook and its embedded chunks in one transaction."""
+
+    from .chunking import chunk_playbook
+
+    playbook = Playbook(title=title, content=content, module_name=module_name)
+    db.add(playbook)
+    db.flush()
+    chunks = chunk_playbook(content, max_chars=chunk_size)
+    for index, chunk in enumerate(chunks):
+        add_memory(
+            db,
+            content=chunk,
+            source="playbook",
+            source_id=str(playbook.id),
+            module_name=module_name,
+            metadata={
+                "playbook_id": playbook.id,
+                "chunk_index": index,
+                "title": playbook.title,
+            },
+            commit=False,
+        )
+    db.commit()
+    db.refresh(playbook)
+    return playbook
 
 
 def save_completed_step(db: Session, step: Step, *, commit: bool = True) -> MemoryEntry | None:

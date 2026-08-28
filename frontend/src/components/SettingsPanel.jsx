@@ -22,6 +22,8 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { ConfirmDialog } from "./ui/dialog";
 import { Input, Select } from "./ui/input";
 import { PanelTitle } from "./PanelTitle";
+import { AssistantConnections } from "./AssistantConnections";
+import { CustomSchemaPanel } from "./CustomSchemaPanel";
 
 export function SettingsPanel({
   status = {},
@@ -136,7 +138,7 @@ export function SettingsPanel({
           icon={Bot}
           title="مدل استدلال"
           value={status.gemini_configured ? "آماده" : "نیازمند کلید"}
-          helper={status.reasoning_model || "gemini-2.5-flash"}
+          helper={status.reasoning_model || "gemini-3.7-flash"}
           ready={status.gemini_configured}
           warning
         />
@@ -367,6 +369,16 @@ export function SettingsPanel({
             </Button>
           </CardContent>
         </Card>
+      </div>
+
+      <AssistantConnections
+        status={status}
+        notify={notify}
+        onStatusChanged={onStatusChanged}
+      />
+
+      <div className="mt-5" data-testid="settings-custom-schema">
+        <CustomSchemaPanel notify={notify} />
       </div>
 
       <ConfirmDialog

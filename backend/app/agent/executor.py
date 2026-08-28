@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..memory.store import save_completed_step
-from ..models import Step, Task
+from ..models import AgentActionRun, Step, Task, utcnow
 from ..services.permissions import ToolDisabledError, ToolNotFoundError, get_tool_record
 from ..tools.registry import ToolContext, call_tool
 
@@ -48,15 +48,32 @@ async def _execute_tool_step(db: Session, task: Task, step: Step) -> bool:
     step.status = "running"
     task.status = "running"
     db.commit()
+    action_run = db.scalar(select(AgentActionRun).where(AgentActionRun.step_id == step.id).limit(1))
+    if action_run is not None:
+        action_run.status = "running"
+        action_run.started_at = action_run.started_at or utcnow()
+        action_run.error = None
+        db.commit()
     try:
         result = await call_tool(
             registered,
-            ToolContext(db=db, task=task, step=step),
+            ToolContext(
+                db=db,
+                task=task,
+                step=step,
+                call_id=action_run.provider_call_id if action_run else None,
+                action_run=action_run,
+            ),
             dict(step.arguments or {}),
         )
         step.result = result
         step.status = "done"
         step.error = None
+        if action_run is not None:
+            action_run.status = "done"
+            action_run.result = result
+            action_run.error = None
+            action_run.finished_at = utcnow()
         db.flush()
         save_completed_step(db, step, commit=False)
         db.commit()
@@ -65,11 +82,18 @@ async def _execute_tool_step(db: Session, task: Task, step: Step) -> bool:
         db.rollback()
         step = db.get(Step, step.id)
         task = db.get(Task, task.id)
+        action_run = db.scalar(
+            select(AgentActionRun).where(AgentActionRun.step_id == step.id).limit(1)
+        )
         if step is not None:
             step.status = "failed"
             step.error = str(exc) or exc.__class__.__name__
         if task is not None:
             task.status = "failed"
+        if action_run is not None:
+            action_run.status = "failed"
+            action_run.error = str(exc) or exc.__class__.__name__
+            action_run.finished_at = utcnow()
         db.commit()
         raise ExecutionError(str(exc) or exc.__class__.__name__, step.id if step else None) from exc
 

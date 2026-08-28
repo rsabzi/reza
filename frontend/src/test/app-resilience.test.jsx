@@ -11,9 +11,7 @@ test("dashboard leaves loading state when Backend requests fail", async () => {
   render(<App />);
 
   await waitFor(() =>
-    expect(
-      screen.getByText(/امروز روی چه چیزی تمرکز می‌کنیم/),
-    ).toBeInTheDocument(),
+    expect(screen.getByText(/سلام، من همراه‌ات هستم/)).toBeInTheDocument(),
   );
   expect(screen.queryByText("در حال همگام‌سازی همراه")).not.toBeInTheDocument();
   expect(
@@ -31,9 +29,7 @@ test("mobile menu has an independent scroll area and hides bottom navigation", a
   });
   render(<App />);
   await waitFor(() =>
-    expect(
-      screen.getByText(/امروز روی چه چیزی تمرکز می‌کنیم/),
-    ).toBeInTheDocument(),
+    expect(screen.getByText(/سلام، من همراه‌ات هستم/)).toBeInTheDocument(),
   );
   expect(screen.getByTestId("mobile-bottom-nav")).toBeInTheDocument();
 

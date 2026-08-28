@@ -23,9 +23,14 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)) -> Task:
 @router.get("", response_model=list[TaskRead])
 def list_tasks(
     task_status: str | None = Query(default=None, alias="status"),
+    include_internal: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> list[Task]:
     statement = select(Task).order_by(Task.created_at.desc(), Task.id.desc())
+    if not include_internal:
+        statement = statement.where(
+            (Task.module_name.is_(None)) | (Task.module_name != "assistant")
+        )
     if task_status:
         statement = statement.where(Task.status == task_status)
     return list(db.scalars(statement))

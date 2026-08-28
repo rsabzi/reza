@@ -21,12 +21,35 @@ class FakeAI:
     def __init__(self, responses):
         self.responses = list(responses)
         self.prompts: list[str] = []
+        self.attempt = 0
 
-    async def generate(self, prompt: str):
+    async def generate(self, prompt: str, operation: str = "decompose_task", log_attempt=None):
         self.prompts.append(prompt)
+        self.attempt += 1
         response = self.responses.pop(0)
         if isinstance(response, Exception):
+            if log_attempt is not None:
+                log_attempt(
+                    operation=operation,
+                    model=self.model,
+                    attempt=self.attempt,
+                    response=None,
+                    error=response,
+                )
             raise response
+        fake_result = type(
+            "FakeInteractionResult",
+            (),
+            {"model": self.model, "output_text": response, "steps": [], "interaction_id": "fake-1"},
+        )()
+        if log_attempt is not None:
+            log_attempt(
+                operation=operation,
+                model=self.model,
+                attempt=self.attempt,
+                response=fake_result,
+                error=None,
+            )
         return response
 
 

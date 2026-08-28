@@ -17,6 +17,18 @@ class RegisteredTool:
     description: str
     requires_approval: bool
     function: ToolFunction
+    schema: dict[str, Any] | None = None
+
+    def declaration(self) -> dict[str, Any]:
+        """Interactions API function declaration; schema from registration or signature."""
+
+        parameters = self.schema or schema_from_signature(self.function)
+        return {
+            "type": "function",
+            "name": self.name,
+            "description": self.description,
+            "parameters": parameters,
+        }
 
 
 @dataclass(slots=True)
@@ -26,6 +38,8 @@ class ToolContext:
     db: Any
     task: Any
     step: Any
+    call_id: str | None = None
+    action_run: Any = None
 
 
 _registry: dict[str, RegisteredTool] = {}
@@ -36,6 +50,7 @@ def register_tool(
     description: str,
     *,
     requires_approval: bool = False,
+    schema: dict[str, Any] | None = None,
 ) -> Callable[[F], F]:
     """Register a function as an agent tool.
 
@@ -53,6 +68,7 @@ def register_tool(
             description=description.strip(),
             requires_approval=requires_approval,
             function=function,
+            schema=schema,
         )
         return function
 
@@ -80,6 +96,46 @@ def validate_tool_arguments(tool: RegisteredTool, arguments: dict[str, Any]) -> 
         inspect.signature(tool.function).bind(None, **arguments)
     except TypeError as exc:
         raise ToolArgumentError(f"Invalid arguments for tool '{tool.name}': {exc}") from exc
+
+
+def _json_type_for(annotation: Any) -> str:
+
+    if annotation in (int,):
+        return "integer"
+    if annotation in (float,):
+        return "number"
+    if annotation in (bool,):
+        return "boolean"
+    if annotation in (list,):
+        return "array"
+    if annotation in (dict,):
+        return "object"
+    return "string"
+
+
+def schema_from_signature(function: ToolFunction) -> dict[str, Any]:
+    """Build a JSON schema from a tool's signature when no schema was registered."""
+
+    signature = inspect.signature(function)
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for name, parameter in signature.parameters.items():
+        if name in {"context", "self", "args", "kwargs"}:
+            continue
+        if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        annotation = parameter.annotation
+        origin = getattr(annotation, "__origin__", None)
+        if origin is not None and str(origin) == "typing.Optional":
+            annotation = annotation.__args__[0]
+        schema_item: dict[str, Any] = {"type": _json_type_for(annotation)}
+        description = getattr(annotation, "__doc__", None)
+        if description:
+            schema_item["description"] = description
+        properties[name] = schema_item
+        if parameter.default is inspect.Parameter.empty:
+            required.append(name)
+    return {"type": "object", "properties": properties, "required": required}
 
 
 async def call_tool(tool: RegisteredTool, context: ToolContext, arguments: dict[str, Any]) -> Any:
