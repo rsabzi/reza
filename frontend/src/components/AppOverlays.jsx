@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   Command,
   ListTodo,
+  MoonStar,
   Search,
   Scissors,
   ShieldCheck,
+  Sunrise,
   X,
 } from "lucide-react";
 import { faNumber } from "../lib/format";
@@ -145,17 +147,22 @@ export function NotificationPopover({
   open,
   approvals = [],
   reminders = [],
+  serverNotifications = [],
   onClose,
   onNavigate,
 }) {
   if (!open) return null;
+  const unreadServer = serverNotifications.filter((item) => !item.read_at);
   return (
     <div className="absolute left-0 top-12 z-50 w-[min(360px,calc(100vw-2rem))] animate-slide-up overflow-hidden rounded-2xl border border-line bg-surface shadow-popover">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <p className="text-xs font-semibold text-white">اعلان‌ها</p>
           <p className="mt-1 text-[9px] text-slate-600">
-            {faNumber(approvals.length + reminders.length)} مورد نیازمند توجه
+            {faNumber(
+              approvals.length + reminders.length + unreadServer.length,
+            )}{" "}
+            مورد نیازمند توجه
           </p>
         </div>
         <Button
@@ -168,7 +175,9 @@ export function NotificationPopover({
         </Button>
       </div>
       <div className="max-h-80 overflow-y-auto p-2">
-        {approvals.length === 0 && reminders.length === 0 ? (
+        {approvals.length === 0 &&
+        reminders.length === 0 &&
+        serverNotifications.length === 0 ? (
           <div className="grid min-h-36 place-items-center text-center">
             <div>
               <CheckCircle2 className="mx-auto text-emerald-300" size={22} />
@@ -219,6 +228,46 @@ export function NotificationPopover({
                     {item.days_until_due === 0
                       ? "موعد امروز"
                       : `${faNumber(item.days_until_due)} روز تا موعد`}
+                  </p>
+                </div>
+              </button>
+            ))}
+            {serverNotifications.slice(0, 4).map((item) => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  onNavigate(
+                    item.kind === "evening_report" ? "overview" : "tasks",
+                  );
+                  onClose();
+                }}
+                className="flex w-full gap-3 rounded-xl p-3 text-right hover:bg-white/[.035]"
+                data-testid={`server-notification-${item.id}`}
+              >
+                <span
+                  className={`grid size-8 shrink-0 place-items-center rounded-lg ${
+                    item.kind === "evening_report"
+                      ? "bg-indigo-400/[.09] text-indigo-300"
+                      : "bg-emerald-400/[.09] text-emerald-300"
+                  }`}
+                >
+                  {item.kind === "evening_report" ? (
+                    <MoonStar size={14} />
+                  ) : (
+                    <Sunrise size={14} />
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium text-slate-300">
+                    {item.title}
+                  </p>
+                  <p className="mt-1 line-clamp-2 whitespace-pre-line text-[9px] leading-5 text-slate-600">
+                    {(item.body?.tasks || [])
+                      .map(
+                        (task) =>
+                          `${task.status === "done" ? "✅" : "⬜"} ${task.title}`,
+                      )
+                      .join("، ")}
                   </p>
                 </div>
               </button>

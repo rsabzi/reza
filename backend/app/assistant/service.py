@@ -14,7 +14,7 @@ from ..agent.ai_client import AIProviderError, ChatClient
 from ..models import AgentConversation, AgentMessage, AILog
 from ..tools.registry import list_registered_tools
 from .context import build_history, build_system_instruction, serialize_runtime_context
-from .dispatcher import execute_action, redact_secrets
+from .dispatcher import action_label, execute_action, redact_secrets
 
 logger = logging.getLogger("agent.assistant")
 
@@ -175,15 +175,29 @@ async def run_chat_turn(
                 log_attempt=log_attempt,
             )
         except AIProviderError:
-            partial = db.get(AgentMessage, assistant_message_id)
-            if partial is not None:
-                partial.content = (
-                    "ارتباط با Gemini قطع شد؛ عملیات انجام‌شده ثبت شده‌اند. "
-                    "بعد از چند لحظه دوباره تلاش کنید."
-                )
-                partial.actions = _serialize_actions(actions)
-                db.commit()
-            raise
+            # Actions already executed are real, persisted work. Failing the
+            # whole turn with 502 after them made the dashboard report a
+            # connection error even though the task had actually been done.
+            # Only surface the provider error when nothing was accomplished.
+            if not actions:
+                partial = db.get(AgentMessage, assistant_message_id)
+                if partial is not None:
+                    partial.content = (
+                        "ارتباط با Gemini برقرار نشد؛ دوباره تلاش کنید. "
+                        "کلیدهای پشتیبان در تنظیمات قابل بررسی است."
+                    )
+                    partial.actions = []
+                    db.commit()
+                raise
+            done = [action for action in actions if action.get("ok") and not action.get("error")]
+            final_text = (
+                "این کارها انجام و ثبت شدند:\n"
+                + "\n".join(f"• {action_label(action.get('name', ''))}" for action in done)
+                + "\n\nفقط خلاصه‌ی نهایی از سمت Gemini نیامد؛ نتیجه کارها معتبر است."
+            )
+            if any_needs_approval:
+                final_text += "\nیک مورد هم در انتظار تأیید شما در مرکز تأیید است."
+            break
         used_model = result.model
         calls = result.function_calls()
         if not calls:

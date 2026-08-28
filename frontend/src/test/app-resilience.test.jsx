@@ -15,7 +15,7 @@ test("dashboard leaves loading state when Backend requests fail", async () => {
   );
   expect(screen.queryByText("در حال همگام‌سازی همراه")).not.toBeInTheDocument();
   expect(
-    screen.getByText(/بارگذاری ۱۰ بخش با خطا روبه‌رو شد/),
+    screen.getByText(/بارگذاری ۱۱ بخش با خطا روبه‌رو شد/),
   ).toBeInTheDocument();
 });
 

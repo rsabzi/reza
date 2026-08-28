@@ -63,6 +63,11 @@ export const api = {
   getGeminiSetting: () => request("/settings/gemini"),
   saveGeminiKey: (apiKey) =>
     request("/settings/gemini", json("PUT", { api_key: apiKey }, 45000)),
+  getGeminiKeys: () => request("/settings/gemini/keys"),
+  addGeminiKey: (apiKey) =>
+    request("/settings/gemini/keys", json("PUT", { api_key: apiKey }, 45000)),
+  removeGeminiKeySlot: (slot) =>
+    request(`/settings/gemini/keys/${slot}`, { method: "DELETE" }),
   setGeminiModel: (model) =>
     request("/settings/gemini/model", json("PUT", { model }, 15000)),
   testGeminiKey: () =>
@@ -81,7 +86,22 @@ export const api = {
     request("/settings/reminder-window", json("PUT", { days })),
 
   assistantChat: (payload) =>
-    request("/assistant/chat", json("POST", payload, 90000)),
+    request("/assistant/chat", json("POST", payload, 180000)),
+  previewTool: (name, args = {}) =>
+    request(`/tools/${name}/preview`, json("POST", { arguments: args }, 30000)),
+  getDailyPlan: () => request("/daily/plan"),
+  setDailySettings: (settings) =>
+    request("/daily/settings", json("PUT", settings, 15000)),
+  assignDailyDeadlines: () =>
+    request("/daily/deadlines/assign", { method: "POST", timeout: 15000 }),
+  submitDailyReport: (content) =>
+    request("/daily/report", json("POST", { content }, 15000)),
+  listDailyReports: (limit = 14) => request(`/daily/reports?limit=${limit}`),
+  getNotifications: (limit = 30) => request(`/notifications?limit=${limit}`),
+  markNotificationRead: (id) =>
+    request(`/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request("/notifications/read-all", { method: "POST" }),
   listConversations: () => request("/assistant/conversations"),
   createConversation: (title) =>
     request("/assistant/conversations", json("POST", { title })),

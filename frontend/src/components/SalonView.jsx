@@ -25,6 +25,7 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
 import { ConfirmDialog, Dialog } from "./ui/dialog";
 import { Field, Input, Select, Textarea } from "./ui/input";
+import { DraftPreviewDialog } from "./DraftPreviewDialog";
 import { EmptyState } from "./EmptyState";
 import { PanelTitle } from "./PanelTitle";
 
@@ -53,6 +54,13 @@ export function SalonView({
   const [deleting, setDeleting] = useState(null);
   const [interactions, setInteractions] = useState([]);
   const [interactionOpen, setInteractionOpen] = useState(false);
+  const [draft, setDraft] = useState({
+    open: false,
+    title: "",
+    text: "",
+    loading: false,
+    error: "",
+  });
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState(false);
@@ -153,29 +161,33 @@ export function SalonView({
   }
 
   async function generateOutreach(salon) {
-    setBusy(true);
+    setDraft({
+      open: true,
+      title: `متن پیگیری برای ${salon.name}`,
+      text: "",
+      loading: true,
+      error: "",
+    });
     try {
-      const task = await api.createTask({
-        title: `متن معرفی برای ${salon.name}`,
-        description: "ساخت پیش‌نویس ارتباطی از ماژول سالن",
-        module_name: "salon",
+      const preview = await api.previewTool("generate_outreach_script", {
+        salon_id: salon.id,
+        offer: "افزایش رزرو و بازگشت مشتری",
       });
-      const step = await api.invokeTool("generate_outreach_script", {
-        task_id: task.id,
-        title: `بازبینی متن معرفی ${salon.name}`,
-        arguments: { salon_id: salon.id, offer: "افزایش رزرو و بازگشت مشتری" },
+      setDraft({
+        open: true,
+        title: `متن پیگیری برای ${salon.name}`,
+        text: preview?.result?.script || "",
+        loading: false,
+        error: "",
       });
-      await onTaskCreated(task, step);
-      notify(
-        step.status === "needs_approval"
-          ? "متن معرفی به صف تأیید اضافه شد"
-          : "متن معرفی تولید شد",
-        "success",
-      );
     } catch (reason) {
-      notify(reason.message, "error");
-    } finally {
-      setBusy(false);
+      setDraft({
+        open: true,
+        title: `متن پیگیری برای ${salon.name}`,
+        text: "",
+        loading: false,
+        error: reason.message,
+      });
     }
   }
 
@@ -389,6 +401,24 @@ export function SalonView({
         }}
         onSave={saveSalon}
       />
+      <DraftPreviewDialog
+        open={draft.open}
+        title={draft.title}
+        text={draft.text}
+        loading={draft.loading}
+        error={draft.error}
+        onClose={() =>
+          setDraft({
+            open: false,
+            title: "",
+            text: "",
+            loading: false,
+            error: "",
+          })
+        }
+        onCopy={() => notify("متن کپی شد", "success")}
+      />
+
       <SalonDetailDialog
         salon={selected}
         interactions={interactions}

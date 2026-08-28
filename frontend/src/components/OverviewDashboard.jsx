@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { faNumber, sourceLabels, truncate } from "../lib/format";
 import { Badge } from "./ui/badge";
+import { DailyPlanCard } from "./DailyPlanCard";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
 import { EmptyState } from "./EmptyState";
@@ -61,6 +62,8 @@ export function OverviewDashboard({
   data,
   onNavigate = () => {},
   onTaskSelect = () => {},
+  notify = () => {},
+  onRefresh = () => {},
 }) {
   const {
     tasks,
@@ -133,6 +136,10 @@ export function OverviewDashboard({
           tone="cyan"
           onClick={() => onNavigate("personal")}
         />
+      </div>
+
+      <div className="mt-5">
+        <DailyPlanCard notify={notify} onChanged={onRefresh} />
       </div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[1.35fr_.65fr]">

@@ -102,6 +102,21 @@ def process_due_recurring_tasks(db: Session, *, now: datetime | None = None) -> 
 def _poll_due_tasks() -> None:
     with SessionLocal() as db:
         process_due_recurring_tasks(db)
+        _poll_daily_brief(db)
+
+
+def _poll_daily_brief(db: Session) -> None:
+    """Create due morning/evening notifications and push them to Telegram."""
+
+    import asyncio
+
+    from .services.daily import process_daily_brief, push_daily_brief_notifications
+
+    try:
+        process_daily_brief(db)
+        asyncio.run(push_daily_brief_notifications(db))
+    except Exception:
+        db.rollback()
 
 
 def start_scheduler() -> BackgroundScheduler:

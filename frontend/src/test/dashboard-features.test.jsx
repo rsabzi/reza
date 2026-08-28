@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { PersonalView } from "../components/PersonalView";
+import { DailyPlanCard } from "../components/DailyPlanCard";
 import { SalonView } from "../components/SalonView";
 import { SettingsPanel } from "../components/SettingsPanel";
 import { TaskDetail } from "../components/TaskDetail";
@@ -195,6 +196,8 @@ test("Settings panel validates and stores Gemini key through Backend", async () 
   };
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
     if (url in subPanels) return response(subPanels[url]);
+    if (url === "/api/settings/gemini/keys")
+      return response({ keys: [], count: 0, max: 10, active_hint: null });
     return response({
       configured: true,
       source: "dashboard",
@@ -216,15 +219,15 @@ test("Settings panel validates and stores Gemini key through Backend", async () 
 
   await user.type(screen.getByLabelText("کلید API جمنای"), rawKey);
   await user.click(
-    screen.getByRole("button", { name: /اعتبارسنجی و ذخیره امن/ }),
+    screen.getByRole("button", { name: /اعتبارسنجی و افزودن به چرخش/ }),
   );
 
   await waitFor(() => expect(onStatusChanged).toHaveBeenCalled());
   const geminiCall = fetchMock.mock.calls.find(
-    (call) => call[0] === "/api/settings/gemini",
+    (call) =>
+      call[0] === "/api/settings/gemini/keys" && call[1]?.method === "PUT",
   );
   expect(geminiCall).toBeDefined();
-  expect(geminiCall[1]).toEqual(expect.objectContaining({ method: "PUT" }));
   expect(JSON.parse(geminiCall[1].body)).toEqual({ api_key: rawKey });
   expect(screen.getByLabelText("کلید API جمنای")).toHaveValue("");
   expect(notify).toHaveBeenCalledWith(
@@ -257,4 +260,191 @@ test("Settings panel tests the live API connection", async () => {
     "ارتباط Dashboard و Agent Core سالم است",
     "success",
   );
+});
+
+test("Settings panel lists rotating keys and removes a single slot", async () => {
+  const user = userEvent.setup();
+  const keysPayload = {
+    keys: [
+      { slot: 1, hint: "••••1111", active: false, cooling_seconds: 0 },
+      { slot: 2, hint: "••••2222", active: true, cooling_seconds: 0 },
+    ],
+    count: 2,
+    max: 10,
+    active_hint: "••••2222",
+  };
+  const calls = [];
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (url, options) => {
+      calls.push([url, options]);
+      if (url === "/api/settings/gemini/keys") {
+        const method = options?.method || "GET";
+        return response(
+          method === "DELETE"
+            ? { keys: keysPayload.keys.slice(0, 1), count: 1, max: 10 }
+            : keysPayload,
+        );
+      }
+      if (url === "/api/contacts") return response([]);
+      if (url === "/api/settings/telegram")
+        return response({ configured: false, source: "none", hint: null });
+      if (url === "/api/outbound-messages") return response([]);
+      if (url === "/api/custom-schema")
+        return response({ tables: [], views: [] });
+      return response({
+        configured: true,
+        source: "dashboard",
+        hint: "••••1111",
+        validated: true,
+        model: "gemini-3.7-flash",
+        models: ["gemini-3.7-flash"],
+      });
+    });
+  const notify = vi.fn();
+  const onStatusChanged = vi.fn().mockResolvedValue(undefined);
+  render(
+    <SettingsPanel
+      status={{
+        api_ready: true,
+        gemini_configured: true,
+        gemini_key_source: "dashboard",
+      }}
+      onStatusChanged={onStatusChanged}
+      notify={notify}
+    />,
+  );
+
+  const list = await screen.findByTestId("gemini-key-list");
+  expect(list).toHaveTextContent("••••1111");
+  expect(list).toHaveTextContent("••••2222");
+  expect(list).toHaveTextContent("متصل / فعال");
+
+  await user.click(screen.getByRole("button", { name: "حذف کلید ••••1111" }));
+  await user.click(await screen.findByRole("button", { name: "حذف کلید" }));
+
+  await waitFor(() =>
+    expect(
+      calls.some(
+        ([url, options]) =>
+          url === "/api/settings/gemini/keys/1" && options?.method === "DELETE",
+      ),
+    ).toBe(true),
+  );
+  expect(notify).toHaveBeenCalledWith(
+    "کلید انتخاب‌شده از چرخش حذف شد",
+    "success",
+  );
+});
+
+test("Salon outreach draft preview shows the text inline", async () => {
+  const user = userEvent.setup();
+  const notify = vi.fn();
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (url, options) => {
+      if (
+        url === "/api/tools/generate_outreach_script/preview" &&
+        options?.method === "POST"
+      ) {
+        return response({
+          tool: "generate_outreach_script",
+          result: {
+            salon_id: 1,
+            script: "سلام سالن آزادی عزیز، پیشنهاد همکاری داریم.",
+          },
+        });
+      }
+      return response([]);
+    });
+  const salons = [
+    {
+      id: 1,
+      name: "سالن آزادی",
+      phone: "09120000111",
+      city: "تهران",
+      status: "lead",
+      tags: [],
+    },
+  ];
+  render(
+    <SalonView
+      salons={salons}
+      dailyPlan={[{ salon: salons[0], days_since_contact: null }]}
+      notify={notify}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: /ساخت متن پیگیری/ }));
+
+  const preview = await screen.findByTestId("draft-preview-text");
+  expect(preview).toHaveTextContent("سلام سالن آزادی عزیز");
+  // The old flow created a task and navigated away; a preview creates nothing.
+  const calls = fetchMock.mock.calls.map(([url]) => url);
+  expect(calls).not.toContain("/api/tasks");
+});
+
+test("Daily plan card assigns deadlines and submits the evening report", async () => {
+  const user = userEvent.setup();
+  const notify = vi.fn();
+  const plan = {
+    settings: {
+      enabled: true,
+      morning_time: "08:00",
+      evening_time: "21:00",
+      timezone: "Asia/Tehran",
+    },
+    today: [{ id: 7, title: "تماس با سالن نمونه", status: "pending" }],
+    unscheduled_count: 2,
+    report_today: null,
+  };
+  const calls = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+    calls.push([url, options]);
+    if (url === "/api/daily/plan") return response(plan);
+    if (url === "/api/daily/deadlines/assign" && options?.method === "POST")
+      return response({
+        assigned: [{ task_id: 1, due_date: "2026-08-29" }],
+        count: 1,
+      });
+    if (url === "/api/daily/report" && options?.method === "POST")
+      return response({
+        id: 1,
+        report_date: "2026-08-28",
+        content: "دو تسک تمام شد",
+      });
+    return response(plan);
+  });
+
+  render(<DailyPlanCard notify={notify} />);
+
+  expect(await screen.findByTestId("daily-plan-card")).toHaveTextContent(
+    "تماس با سالن نمونه",
+  );
+
+  await user.click(screen.getByTestId("assign-deadlines"));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        ([url, options]) =>
+          url === "/api/daily/deadlines/assign" && options?.method === "POST",
+      ),
+    ).toBe(true),
+  );
+  expect(notify).toHaveBeenCalledWith(
+    "۱ تسک از فردا، روزی یکی زمان تحویل گرفت",
+    "success",
+  );
+
+  await user.type(screen.getByLabelText("گزارش شبانه"), "دو تسک تمام شد");
+  await user.click(screen.getByTestId("submit-report"));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        ([url, options]) =>
+          url === "/api/daily/report" && options?.method === "POST",
+      ),
+    ).toBe(true),
+  );
+  expect(notify).toHaveBeenCalledWith("گزارش امروز ثبت شد", "success");
 });

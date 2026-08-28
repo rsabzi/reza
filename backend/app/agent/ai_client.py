@@ -1,10 +1,15 @@
-"""Google Gemini Interactions API client with model fallback and audit hooks.
+"""Google Gemini Interactions API client with key rotation, model fallback, audit hooks.
 
 Everything runtime-related uses the Interactions API (``client.aio.interactions.create``)
 instead of the deprecated ``generateContent`` path. The model choice is configurable
 through ``GEMINI_MODEL`` / the dashboard preference; if a chosen model answers with
 404 / "no longer available", the client advances to the next supported candidate
 instead of retrying the dead model.
+
+Several API keys may be configured at once. Key-specific failures (429 rate limit,
+exhausted quota, rejected credential) rotate to the next healthy key immediately so
+the user's task keeps running; the last key that worked is tried first on the next
+call. Key health lives in the process-wide :data:`SHARED_KEY_POOL`.
 """
 
 from __future__ import annotations
@@ -20,7 +25,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..services.preferences import resolved_model_name
-from ..services.secrets import resolve_gemini_api_key
+from ..services.secrets import resolve_gemini_api_keys
+from .key_pool import SHARED_KEY_POOL, ApiKey
 
 # Current stable Flash model per the official Gemini docs (August 2026).
 DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
@@ -84,6 +90,32 @@ def is_model_unavailable_error(exc: Exception) -> bool:
     if "404" in text or "not_found" in text:
         return True
     return any(marker in text for marker in MODEL_UNAVAILABLE_MARKERS)
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """429 / rate limit / quota errors are key-specific: rotate to another key."""
+
+    code = getattr(exc, "code", None)
+    if code == 429:
+        return True
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    markers = (
+        "429",
+        "resource_exhausted",
+        "resource exhausted",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "quota",
+    )
+    return any(marker in text for marker in markers)
+
+
+def is_quota_exhausted_error(exc: Exception) -> bool:
+    """Longer cooldown: the key burned through its quota, not a burst limit."""
+
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    return "quota" in text or "exhausted" in text or "exceeded" in text
 
 
 def is_transient_error(exc: Exception) -> bool:
@@ -173,21 +205,47 @@ class ChatClient(Protocol):
     async def generate(self, prompt: str, operation: str = "decompose_task") -> str: ...
 
 
+class _KeyFailure(Exception):
+    """Internal control flow: this key is unusable right now, try the next one."""
+
+    def __init__(self, kind: str, exc: Exception) -> None:
+        super().__init__(kind)
+        self.kind = kind  # invalid | rate_limited | quota | provider | models
+        self.exc = exc
+
+
+def _normalize_keys(api_keys: Sequence[str | ApiKey] | None, api_key: str | None) -> list[ApiKey]:
+    raw: list[str | ApiKey] = list(api_keys) if api_keys is not None else []
+    if api_key:
+        raw.append(api_key)
+    unique: list[ApiKey] = []
+    seen: set[str] = set()
+    for item in raw:
+        value = item.value if isinstance(item, ApiKey) else (item or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            unique.append(ApiKey.of(value))
+    return unique
+
+
 class GeminiInteractionsClient:
-    """Async Interactions API adapter with candidate fallback and backoff."""
+    """Async Interactions API adapter with key rotation, model fallback, backoff."""
 
     def __init__(
         self,
-        api_key: str | None,
+        api_key: str | None = None,
         *,
+        api_keys: Sequence[str | ApiKey] | None = None,
         preferred_model: str | None = None,
         candidates: Sequence[str] | None = None,
         max_retries: int = 3,
         backoff_base: float = 1.0,
         call_timeout: float = 60.0,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        key_pool: Any | None = None,
     ) -> None:
-        self.api_key = api_key or ""
+        self._keys = _normalize_keys(api_keys, api_key)
+        self.api_key = self._keys[0].value if self._keys else ""
         self.preferred_model = preferred_model or default_model_from_env()
         self.candidates = (
             list(candidates) if candidates else configured_model_candidates(self.preferred_model)
@@ -197,9 +255,11 @@ class GeminiInteractionsClient:
         self.backoff_base = max(0.0, backoff_base)
         self.call_timeout = call_timeout
         self._sleep = sleep or asyncio.sleep
+        self._pool = key_pool if key_pool is not None else SHARED_KEY_POOL
+        self._current_key: ApiKey | None = None
 
     def _require_key(self) -> None:
-        if not self.api_key:
+        if not self._keys:
             raise AIConfigurationError(
                 "Gemini API key is not configured; add and validate it in Dashboard settings"
             )
@@ -210,21 +270,28 @@ class GeminiInteractionsClient:
         self._require_key()
         from google import genai
 
-        async with genai.Client(api_key=self.api_key).aio as client:
+        key = self._current_key or self._keys[0]
+        async with genai.Client(api_key=key.value).aio as client:
             return await asyncio.wait_for(
                 client.interactions.create(model=model, **payload),
                 timeout=self.call_timeout,
             )
 
-    async def _run_with_fallback(
+    async def _try_key(
         self,
+        key: ApiKey,
         *,
         operation: str,
         attempt_callback: Callable[[str], None] | None,
         log_attempt: Callable[..., None] | None,
         payload_factory: Callable[[], dict[str, Any]],
     ) -> InteractionResult:
-        """Try candidates; retry transient errors with backoff; log every attempt."""
+        """Run the model candidate chain with one key.
+
+        Raises :class:`_KeyFailure` when the key itself (not the model) is the
+        problem, or when this key's retries were exhausted, so the caller can
+        rotate to the next key.
+        """
 
         last_error: Exception | None = None
         used_model: str | None = None
@@ -236,6 +303,7 @@ class GeminiInteractionsClient:
                 if attempt_callback is not None:
                     attempt_callback(model)
                 try:
+                    self._current_key = key
                     response = await self._create_interaction(model, **payload_factory())
                     result = InteractionResult(
                         model=model,
@@ -252,6 +320,7 @@ class GeminiInteractionsClient:
                             error=None,
                         )
                     self.model = model
+                    self._pool.mark_success(key)
                     return result
                 except Exception as exc:
                     last_error = exc
@@ -266,16 +335,76 @@ class GeminiInteractionsClient:
                     if is_model_unavailable_error(exc):
                         # Dead model: never retry it; advance to the next candidate.
                         break
+                    if is_invalid_key_error(exc):
+                        raise _KeyFailure("invalid", exc) from exc
+                    if is_rate_limit_error(exc):
+                        # Rotating to a healthy key beats sleeping on a limited
+                        # one; only backoff-retry when no alternative exists.
+                        alternative = self._pool.has_ready_alternative(self._keys, key)
+                        if not alternative and attempt_no < self.max_retries:
+                            await self._sleep(self.backoff_base * (2 ** (attempt_no - 1)))
+                            continue
+                        kind = "quota" if is_quota_exhausted_error(exc) else "rate_limited"
+                        raise _KeyFailure(kind, exc) from exc
                     if is_transient_error(exc):
                         if attempt_no < self.max_retries:
                             await self._sleep(self.backoff_base * (2 ** (attempt_no - 1)))
                             continue
-                        raise AIProviderError(
-                            f"Gemini call to {model} failed after {attempt_no} attempts: {exc}"
-                        ) from exc
-                    raise AIProviderError(f"Gemini call to {model} failed: {exc}") from exc
-        raise ModelUnavailableError(
-            f"No supported Gemini model answered; last error with {used_model}: {last_error}"
+                        raise _KeyFailure("provider", exc) from exc
+                    raise _KeyFailure("provider", exc) from exc
+        raise _KeyFailure(
+            "models",
+            ModelUnavailableError(
+                f"No supported Gemini model answered with key {key.hint} "
+                f"(last model {used_model}): {last_error}"
+            ),
+        ) from last_error
+
+    async def _run_with_fallback(
+        self,
+        *,
+        operation: str,
+        attempt_callback: Callable[[str], None] | None,
+        log_attempt: Callable[..., None] | None,
+        payload_factory: Callable[[], dict[str, Any]],
+    ) -> InteractionResult:
+        """Rotate over keys, then model candidates; retry transient errors; log all."""
+
+        self._require_key()
+        failures: list[tuple[ApiKey, _KeyFailure]] = []
+        last_error: Exception | None = None
+        for key in self._pool.order_keys(self._keys):
+            try:
+                return await self._try_key(
+                    key,
+                    operation=operation,
+                    attempt_callback=attempt_callback,
+                    log_attempt=log_attempt,
+                    payload_factory=payload_factory,
+                )
+            except _KeyFailure as failure:
+                last_error = failure.exc
+                failures.append((key, failure))
+                if failure.kind == "invalid":
+                    self._pool.mark_invalid(key)
+                elif failure.kind == "quota":
+                    self._pool.mark_quota_exhausted(key)
+                elif failure.kind == "rate_limited":
+                    self._pool.mark_rate_limited(key)
+                # "provider"/"models" carry no cooldown: the next call may retry.
+
+        summary = "; ".join(f"key {key.hint}: {failure.kind}" for key, failure in failures)
+        kinds = {failure.kind for _, failure in failures}
+        if kinds == {"invalid"}:
+            raise GeminiInvalidKeyError(
+                f"All configured Gemini API keys were rejected by Google ({summary})",
+            ) from last_error
+        if kinds == {"models"}:
+            raise ModelUnavailableError(
+                f"No supported Gemini model answered on any key ({summary})",
+            ) from last_error
+        raise AIProviderError(
+            f"Gemini call failed on every configured API key ({summary}); last error: {last_error}"
         ) from last_error
 
     async def chat(
@@ -327,13 +456,15 @@ class GeminiInteractionsClient:
 
 
 def build_interactions_client(
-    api_key: str | None,
+    api_key: str | None = None,
     *,
+    api_keys: Sequence[str | ApiKey] | None = None,
     preferred_model: str | None = None,
     candidates: Sequence[str] | None = None,
 ) -> GeminiInteractionsClient:
     return GeminiInteractionsClient(
         api_key=api_key,
+        api_keys=api_keys,
         preferred_model=preferred_model,
         candidates=candidates,
     )
@@ -453,6 +584,6 @@ def get_ai_client(db: Session = Depends(get_db)) -> GeminiInteractionsClient:
     """FastAPI dependency using encrypted Dashboard settings before environment fallback."""
 
     return build_interactions_client(
-        resolve_gemini_api_key(db),
+        api_keys=resolve_gemini_api_keys(db),
         preferred_model=resolved_model_name(db, default_model_from_env()),
     )

@@ -18,7 +18,7 @@ from ..services.permissions import (
     invoke_tool,
     sync_registered_tools,
 )
-from ..tools.registry import ToolArgumentError
+from ..tools.registry import ToolArgumentError, ToolContext, call_tool
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -92,3 +92,47 @@ async def invoke_tool_endpoint(tool_name: str, payload: ToolInvoke, db: Session 
             status_code=502,
             detail={"message": f"Tool execution failed: {exc}", "step_id": exc.step.id},
         ) from exc
+
+
+# Pure text-builder tools with no side effects; safe to draft inline in the UI
+# without creating a Task/Step or pausing for approval.
+PREVIEWABLE_TOOLS: frozenset[str] = frozenset(
+    {
+        "generate_outreach_script",
+        "prepare_salon_outreach",
+        "draft_project_proposal",
+    }
+)
+
+
+class ToolPreview(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/{tool_name}/preview")
+async def preview_tool_endpoint(
+    tool_name: str, payload: ToolPreview, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Run a side-effect-free draft tool and return its text immediately."""
+
+    if tool_name not in PREVIEWABLE_TOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail="این ابزار پیش‌نمایش فوری ندارد؛ از اجرای عادی تسک استفاده کنید",
+        )
+    sync_registered_tools(db)
+    try:
+        registered, policy = get_tool_record(db, tool_name)
+    except ToolNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not policy.enabled:
+        raise HTTPException(status_code=403, detail=f"Tool '{tool_name}' is disabled")
+    try:
+        result = await call_tool(
+            registered, ToolContext(db=db, task=None, step=None), payload.arguments
+        )
+    except ToolArgumentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"tool": tool_name, "result": result}

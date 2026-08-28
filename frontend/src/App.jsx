@@ -81,6 +81,8 @@ const initialData = {
   salonPlan: [],
   projects: [],
   reminders: [],
+  serverNotifications: [],
+  unreadNotifications: 0,
   system: {},
   health: false,
 };
@@ -110,6 +112,23 @@ export default function App() {
     );
   }, []);
 
+  useEffect(() => {
+    if (!notificationsOpen || !data.unreadNotifications) return;
+    api
+      .markAllNotificationsRead()
+      .then(() =>
+        setData((current) => ({
+          ...current,
+          unreadNotifications: 0,
+          serverNotifications: current.serverNotifications.map((item) => ({
+            ...item,
+            read_at: item.read_at || new Date().toISOString(),
+          })),
+        })),
+      )
+      .catch(() => {});
+  }, [notificationsOpen, data.unreadNotifications]);
+
   const loadDashboard = useCallback(
     async (silent = false) => {
       if (silent) setRefreshing(true);
@@ -128,6 +147,7 @@ export default function App() {
         api.listProjects(),
         api.reminders(),
         api.systemStatus(),
+        api.getNotifications(),
       ];
       const results = await Promise.allSettled(requests);
       const keys = [
@@ -149,6 +169,12 @@ export default function App() {
         });
         next.health =
           results[9].status === "fulfilled" && results[9].value.api_ready;
+        const notificationsResult = results[10];
+        if (notificationsResult.status === "fulfilled") {
+          next.serverNotifications =
+            notificationsResult.value.notifications || [];
+          next.unreadNotifications = notificationsResult.value.unread || 0;
+        }
         return next;
       });
       const failures = results.filter((result) => result.status === "rejected");
@@ -344,6 +370,8 @@ export default function App() {
         data={data}
         onNavigate={navigate}
         onTaskSelect={selectTask}
+        notify={notify}
+        onRefresh={() => loadDashboard(true)}
       />
     ),
     tasks: (
@@ -460,10 +488,15 @@ export default function App() {
       <Topbar
         active={active}
         loading={refreshing}
-        notificationCount={data.approvals.length + data.reminders.length}
+        notificationCount={
+          data.approvals.length +
+          data.reminders.length +
+          (data.unreadNotifications || 0)
+        }
         notificationsOpen={notificationsOpen}
         approvals={data.approvals}
         reminders={data.reminders}
+        serverNotifications={data.serverNotifications}
         onMenu={() => setMenuOpen(true)}
         onRefresh={() => loadDashboard(true)}
         onSearch={() => setSearchOpen(true)}
@@ -673,6 +706,7 @@ function Topbar({
   loading,
   notificationCount,
   notificationsOpen,
+  serverNotifications = [],
   approvals,
   reminders,
   onMenu,
@@ -758,6 +792,7 @@ function Topbar({
             open={notificationsOpen}
             approvals={approvals}
             reminders={reminders}
+            serverNotifications={serverNotifications}
             onClose={onCloseNotifications}
             onNavigate={onNavigate}
           />
