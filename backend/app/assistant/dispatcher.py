@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..custom_schema import CustomSchemaError, prevalidate_request
 from ..models import AgentActionRun, Step, Task, Tool, utcnow
 from ..services.permissions import ToolDisabledError, ToolNotFoundError, get_tool_record
-from ..services.secrets import GEMINI_SECRET_KEY, TELEGRAM_SECRET_KEY, get_secret
+from ..services.secrets import redact_stored_secrets
 from ..tools.registry import ToolContext, call_tool, validate_tool_arguments
 from . import tools as assistant_tools
 
@@ -58,17 +58,12 @@ def action_label(action_name: str) -> str:
 
 
 def redact_secrets(db: Session, text: str) -> str:
-    """Never persist or return raw secrets inside tool errors."""
+    """Never persist or return raw secrets (all Gemini keys + Telegram) in errors."""
 
-    redacted = text
-    for key in (GEMINI_SECRET_KEY, TELEGRAM_SECRET_KEY):
-        try:
-            secret = get_secret(db, key)
-        except Exception:
-            secret = None
-        if secret and len(secret) >= 8:
-            redacted = redacted.replace(secret, "••••")
-    return redacted
+    try:
+        return redact_stored_secrets(db, text)
+    except Exception:
+        return text
 
 
 def _function_result(

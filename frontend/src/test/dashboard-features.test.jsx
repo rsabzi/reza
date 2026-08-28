@@ -195,6 +195,8 @@ test("Settings panel validates and stores Gemini key through Backend", async () 
   };
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
     if (url in subPanels) return response(subPanels[url]);
+    if (url === "/api/settings/gemini/keys")
+      return response({ keys: [], count: 0, max: 10, active_hint: null });
     return response({
       configured: true,
       source: "dashboard",
@@ -216,15 +218,15 @@ test("Settings panel validates and stores Gemini key through Backend", async () 
 
   await user.type(screen.getByLabelText("کلید API جمنای"), rawKey);
   await user.click(
-    screen.getByRole("button", { name: /اعتبارسنجی و ذخیره امن/ }),
+    screen.getByRole("button", { name: /اعتبارسنجی و افزودن به چرخش/ }),
   );
 
   await waitFor(() => expect(onStatusChanged).toHaveBeenCalled());
   const geminiCall = fetchMock.mock.calls.find(
-    (call) => call[0] === "/api/settings/gemini",
+    (call) =>
+      call[0] === "/api/settings/gemini/keys" && call[1]?.method === "PUT",
   );
   expect(geminiCall).toBeDefined();
-  expect(geminiCall[1]).toEqual(expect.objectContaining({ method: "PUT" }));
   expect(JSON.parse(geminiCall[1].body)).toEqual({ api_key: rawKey });
   expect(screen.getByLabelText("کلید API جمنای")).toHaveValue("");
   expect(notify).toHaveBeenCalledWith(
@@ -255,6 +257,81 @@ test("Settings panel tests the live API connection", async () => {
   );
   expect(notify).toHaveBeenCalledWith(
     "ارتباط Dashboard و Agent Core سالم است",
+    "success",
+  );
+});
+
+test("Settings panel lists rotating keys and removes a single slot", async () => {
+  const user = userEvent.setup();
+  const keysPayload = {
+    keys: [
+      { slot: 1, hint: "••••1111", active: false, cooling_seconds: 0 },
+      { slot: 2, hint: "••••2222", active: true, cooling_seconds: 0 },
+    ],
+    count: 2,
+    max: 10,
+    active_hint: "••••2222",
+  };
+  const calls = [];
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (url, options) => {
+      calls.push([url, options]);
+      if (url === "/api/settings/gemini/keys") {
+        const method = options?.method || "GET";
+        return response(
+          method === "DELETE"
+            ? { keys: keysPayload.keys.slice(0, 1), count: 1, max: 10 }
+            : keysPayload,
+        );
+      }
+      if (url === "/api/contacts") return response([]);
+      if (url === "/api/settings/telegram")
+        return response({ configured: false, source: "none", hint: null });
+      if (url === "/api/outbound-messages") return response([]);
+      if (url === "/api/custom-schema")
+        return response({ tables: [], views: [] });
+      return response({
+        configured: true,
+        source: "dashboard",
+        hint: "••••1111",
+        validated: true,
+        model: "gemini-3.7-flash",
+        models: ["gemini-3.7-flash"],
+      });
+    });
+  const notify = vi.fn();
+  const onStatusChanged = vi.fn().mockResolvedValue(undefined);
+  render(
+    <SettingsPanel
+      status={{
+        api_ready: true,
+        gemini_configured: true,
+        gemini_key_source: "dashboard",
+      }}
+      onStatusChanged={onStatusChanged}
+      notify={notify}
+    />,
+  );
+
+  const list = await screen.findByTestId("gemini-key-list");
+  expect(list).toHaveTextContent("••••1111");
+  expect(list).toHaveTextContent("••••2222");
+  expect(list).toHaveTextContent("متصل / فعال");
+
+  await user.click(screen.getByRole("button", { name: "حذف کلید ••••1111" }));
+  await user.click(await screen.findByRole("button", { name: "حذف کلید" }));
+
+  await waitFor(() =>
+    expect(
+      calls.some(
+        ([url, options]) =>
+          url === "/api/settings/gemini/keys/1" && options?.method === "DELETE",
+      ),
+    ).toBe(true),
+  );
+  expect(notify).toHaveBeenCalledWith(
+    "کلید انتخاب‌شده از چرخش حذف شد",
     "success",
   );
 });

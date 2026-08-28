@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bot,
   BrainCircuit,
@@ -36,10 +36,24 @@ export function SettingsPanel({
   const [testing, setTesting] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const [removingKey, setRemovingKey] = useState(false);
-  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState(null); // null | "all" | slot
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [keyError, setKeyError] = useState("");
+  const [geminiKeys, setGeminiKeys] = useState({ keys: [], count: 0, max: 10 });
+
+  async function loadKeys() {
+    try {
+      const result = await api.getGeminiKeys();
+      setGeminiKeys(result);
+    } catch {
+      // Key management is auxiliary; status chips already surface failures.
+    }
+  }
+
+  useEffect(() => {
+    loadKeys();
+  }, [status.gemini_key_hint, status.gemini_configured]);
 
   async function testConnection() {
     setTesting(true);
@@ -62,20 +76,35 @@ export function SettingsPanel({
     setSavingKey(true);
     setKeyError("");
     try {
-      const result = await api.saveGeminiKey(apiKey.trim());
+      const result = await api.addGeminiKey(apiKey.trim());
       setApiKey("");
       setShowKey(false);
+      setGeminiKeys(result);
       await onStatusChanged();
       notify(
-        result.validated
-          ? "کلید توسط Google تأیید و به‌صورت رمز‌شده ذخیره شد"
-          : "کلید ذخیره شد",
+        result.count > 1
+          ? "کلید جدید تأیید و به چرخش کلیدها اضافه شد"
+          : "کلید توسط Google تأیید و به‌صورت رمز‌شده ذخیره شد",
         "success",
       );
     } catch (reason) {
       setKeyError(reason.message);
     } finally {
       setSavingKey(false);
+    }
+  }
+
+  async function removeGeminiKeySlot(slot) {
+    setRemovingKey(true);
+    try {
+      const result = await api.removeGeminiKeySlot(slot);
+      setGeminiKeys(result);
+      await onStatusChanged();
+      notify("کلید انتخاب‌شده از چرخش حذف شد", "success");
+    } catch (reason) {
+      notify(reason.message, "error");
+    } finally {
+      setRemovingKey(false);
     }
   }
 
@@ -97,10 +126,17 @@ export function SettingsPanel({
   async function removeGemini() {
     setRemovingKey(true);
     try {
-      await api.removeGeminiKey();
-      setRemoveOpen(false);
+      if (removeTarget === "all") {
+        await api.removeGeminiKey();
+        setGeminiKeys({ keys: [], count: 0, max: geminiKeys.max });
+        notify("همه کلیدهای ذخیره‌شده از Dashboard حذف شد", "success");
+      } else if (typeof removeTarget === "number") {
+        const result = await api.removeGeminiKeySlot(removeTarget);
+        setGeminiKeys(result);
+        notify("کلید انتخاب‌شده از چرخش حذف شد", "success");
+      }
+      setRemoveTarget(null);
       await onStatusChanged();
-      notify("کلید ذخیره‌شده از Dashboard حذف شد", "success");
     } catch (reason) {
       notify(reason.message, "error");
     } finally {
@@ -188,7 +224,9 @@ export function SettingsPanel({
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-xs font-semibold text-slate-200">
                       {status.gemini_configured
-                        ? "Gemini متصل است"
+                        ? geminiKeys.count > 1
+                          ? `Gemini متصل است (${geminiKeys.count} کلید در چرخش)`
+                          : "Gemini متصل است"
                         : "کلید Gemini تنظیم نشده"}
                     </p>
                     {status.gemini_key_hint && (
@@ -209,12 +247,68 @@ export function SettingsPanel({
               </div>
             </div>
 
+            {geminiKeys.keys?.length > 0 && (
+              <div
+                data-testid="gemini-key-list"
+                className="mt-3 divide-y divide-line/60 rounded-xl border border-line/60"
+              >
+                {geminiKeys.keys.map((item) => (
+                  <div
+                    key={item.slot}
+                    className="flex items-center gap-2 px-3 py-2.5"
+                  >
+                    <span
+                      dir="ltr"
+                      className="grid size-6 shrink-0 place-items-center rounded-lg bg-black/25 font-mono text-[10px] text-slate-400"
+                    >
+                      {item.slot}
+                    </span>
+                    <code
+                      dir="ltr"
+                      className="font-mono text-[11px] text-slate-300"
+                    >
+                      {item.hint || "••••"}
+                    </code>
+                    {item.active ? (
+                      <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-medium text-emerald-300">
+                        متصل / فعال
+                      </span>
+                    ) : item.cooling_seconds > 0 ? (
+                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-0.5 text-[9px] font-medium text-amber-300">
+                        استراحت موقت ({Math.ceil(item.cooling_seconds)}ث)
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-line px-2 py-0.5 text-[9px] text-slate-500">
+                        ذخیره‌شده
+                      </span>
+                    )}
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      aria-label={`حذف کلید ${item.hint || item.slot}`}
+                      disabled={removingKey}
+                      onClick={() => setRemoveTarget(item.slot)}
+                      className="text-slate-600 transition hover:text-rose-300 disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                <p className="px-3 py-2 text-[9px] leading-5 text-slate-600">
+                  اگر کلیدی به محدودیت نرخ یا سهمیه برخورد کند، Backend بدون قطع
+                  شدن تسک به کلید بعدی می‌رود و کلید سالم را فعال نگه می‌دارد.
+                </p>
+              </div>
+            )}
+
             <form onSubmit={saveGeminiKey} className="mt-4">
               <label
                 className="text-xs font-medium text-slate-300"
                 htmlFor="gemini-key"
               >
-                {status.gemini_configured ? "جایگزینی کلید" : "Gemini API Key"}
+                {geminiKeys.count > 0
+                  ? `افزودن کلید بعدی به چرخش (${geminiKeys.count}/${geminiKeys.max})`
+                  : "Gemini API Key"}
               </label>
               <div className="relative mt-2">
                 <Input
@@ -261,7 +355,7 @@ export function SettingsPanel({
                   loading={savingKey}
                   disabled={!apiKey.trim()}
                 >
-                  <ShieldCheck size={14} /> اعتبارسنجی و ذخیره امن
+                  <ShieldCheck size={14} /> اعتبارسنجی و افزودن به چرخش
                 </Button>
               </div>
             </form>
@@ -280,9 +374,9 @@ export function SettingsPanel({
                   <Button
                     variant="danger"
                     size="sm"
-                    onClick={() => setRemoveOpen(true)}
+                    onClick={() => setRemoveTarget("all")}
                   >
-                    <Trash2 size={14} /> حذف کلید ذخیره‌شده
+                    <Trash2 size={14} /> حذف همه کلیدها
                   </Button>
                 )}
               </div>
@@ -382,12 +476,18 @@ export function SettingsPanel({
       </div>
 
       <ConfirmDialog
-        open={removeOpen}
-        onClose={() => setRemoveOpen(false)}
+        open={removeTarget !== null}
+        onClose={() => setRemoveTarget(null)}
         onConfirm={removeGemini}
         loading={removingKey}
-        title="حذف کلید Gemini؟"
-        description="نسخه رمز‌شده‌ای که از Dashboard ثبت کرده‌اید حذف می‌شود. در صورت وجود متغیر محیطی، Backend به‌طور خودکار از آن استفاده خواهد کرد."
+        title={
+          removeTarget === "all" ? "حذف همه کلیدهای Gemini؟" : "حذف این کلید؟"
+        }
+        description={
+          removeTarget === "all"
+            ? "نسخه رمز‌شده همه کلیدهایی که از Dashboard ثبت کرده‌اید حذف می‌شود. در صورت وجود متغیر محیطی، Backend به‌طور خودکار از آن استفاده خواهد کرد."
+            : "این کلید از چرخش حذف می‌شود؛ بقیه کلیدها فعال می‌مانند."
+        }
         confirmLabel="حذف کلید"
       />
     </div>

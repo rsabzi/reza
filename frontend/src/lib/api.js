@@ -63,6 +63,11 @@ export const api = {
   getGeminiSetting: () => request("/settings/gemini"),
   saveGeminiKey: (apiKey) =>
     request("/settings/gemini", json("PUT", { api_key: apiKey }, 45000)),
+  getGeminiKeys: () => request("/settings/gemini/keys"),
+  addGeminiKey: (apiKey) =>
+    request("/settings/gemini/keys", json("PUT", { api_key: apiKey }, 45000)),
+  removeGeminiKeySlot: (slot) =>
+    request(`/settings/gemini/keys/${slot}`, { method: "DELETE" }),
   setGeminiModel: (model) =>
     request("/settings/gemini/model", json("PUT", { model }, 15000)),
   testGeminiKey: () =>

@@ -15,6 +15,7 @@ from ..agent.ai_client import (
     ModelUnavailableError,
     default_model_from_env,
 )
+from ..agent.key_pool import SHARED_KEY_POOL
 from ..database import get_db
 from ..services.preferences import (
     MODEL_PREFERENCE_KEY,
@@ -25,11 +26,20 @@ from ..services.preferences import (
 )
 from ..services.secrets import (
     GEMINI_SECRET_KEY,
+    MAX_GEMINI_KEYS,
     TELEGRAM_SECRET_KEY,
     SecretStoreError,
+    add_gemini_key,
+    delete_all_gemini_keys,
+    delete_gemini_key_slot,
     delete_secret,
+    environment_gemini_key,
+    gemini_keys_overview,
     gemini_secret_status,
-    resolve_gemini_api_key,
+    get_gemini_key_by_slot,
+    list_gemini_key_slots,
+    redact_stored_secrets,
+    resolve_gemini_api_keys,
     set_secret,
     telegram_secret_status,
 )
@@ -51,6 +61,22 @@ class GeminiKeyInput(BaseModel):
 
 class GeminiModelInput(BaseModel):
     model: str
+
+
+class GeminiKeyStatus(BaseModel):
+    slot: int
+    hint: str | None
+    active: bool = False
+    cooling_seconds: float = 0.0
+    last_error: str | None = None
+
+
+class GeminiKeysStatus(BaseModel):
+    keys: list[GeminiKeyStatus]
+    count: int
+    max: int
+    active_hint: str | None = None
+    environment: bool = False
 
 
 class GeminiSettingStatus(BaseModel):
@@ -81,6 +107,36 @@ async def validate_gemini_api_key(api_key: str) -> str:
 
     model, _ = await provider_validate(api_key)
     return model
+
+
+async def _validated_key_or_http_error(api_key: str) -> str:
+    """Validate a key with Google or raise the matching user-facing HTTP error."""
+
+    try:
+        return await validate_gemini_api_key(api_key)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Google Gemini did not respond in time; the key was not saved",
+        ) from exc
+    except GeminiInvalidKeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google این کلید را رد کرد؛ کلید Gemini را بررسی کنید (the key was not saved)",
+        ) from exc
+    except (GeminiNetworkError, ModelUnavailableError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "سرور فعلی به سرویس Google دسترسی ندارد (شبکه/TLS/proxy)؛ "
+                "اتصال سرور را بررسی کنید (the key was not saved)"
+            ),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google rejected the Gemini key or the service is unreachable; the key was not saved",
+        ) from exc
 
 
 async def discover_supported_models(api_key: str) -> list[str]:
@@ -120,31 +176,7 @@ async def save_gemini_setting(
     api_key = payload.api_key.strip()
     if not 10 <= len(api_key) <= 500:
         raise HTTPException(status_code=422, detail="Gemini API key length is invalid")
-    try:
-        discovered = await validate_gemini_api_key(api_key)
-    except TimeoutError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Google Gemini did not respond in time; the key was not saved",
-        ) from exc
-    except GeminiInvalidKeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google این کلید را رد کرد؛ کلید Gemini را بررسی کنید (the key was not saved)",
-        ) from exc
-    except (GeminiNetworkError, ModelUnavailableError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "سرور فعلی به سرویس Google دسترسی ندارد (شبکه/TLS/proxy)؛ "
-                "اتصال سرور را بررسی کنید (the key was not saved)"
-            ),
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google rejected the Gemini key or the service is unreachable; the key was not saved",
-        ) from exc
+    discovered = await _validated_key_or_http_error(api_key)
 
     try:
         set_secret(
@@ -153,6 +185,7 @@ async def save_gemini_setting(
             api_key,
             hint=f"••••{api_key[-4:]}",
         )
+        SHARED_KEY_POOL.forget(api_key)
         model_status = _gemini_status(db, validated=True).model_dump()
         model_status["model"] = discovered
         if get_preference(db, MODEL_PREFERENCE_KEY) is None:
@@ -161,6 +194,83 @@ async def save_gemini_setting(
         return GeminiSettingStatus(**model_status)
     except (SecretStoreError, ValueError) as exc:
         raise HTTPException(status_code=500, detail=f"Could not store Gemini key: {exc}") from exc
+
+
+def _gemini_keys_status(db: Session) -> GeminiKeysStatus:
+    keys: list[GeminiKeyStatus] = []
+    active_value = SHARED_KEY_POOL.active
+    active_hint: str | None = None
+    for item in gemini_keys_overview(db):
+        value = get_gemini_key_by_slot(db, item["slot"]) or ""
+        is_active = bool(value) and value == active_value
+        last_error = SHARED_KEY_POOL.last_error(value) if value else None
+        keys.append(
+            GeminiKeyStatus(
+                slot=item["slot"],
+                hint=item["hint"],
+                active=is_active,
+                cooling_seconds=SHARED_KEY_POOL.cooling_seconds(value) if value else 0.0,
+                last_error=(redact_stored_secrets(db, last_error) or None if last_error else None),
+            )
+        )
+        if is_active and item["hint"]:
+            active_hint = item["hint"]
+    return GeminiKeysStatus(
+        keys=keys,
+        count=len(keys),
+        max=MAX_GEMINI_KEYS,
+        active_hint=active_hint,
+        environment=bool(environment_gemini_key()),
+    )
+
+
+@router.get("/gemini/keys", response_model=GeminiKeysStatus)
+def get_gemini_keys(db: Session = Depends(get_db)) -> GeminiKeysStatus:
+    try:
+        return _gemini_keys_status(db)
+    except SecretStoreError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.put("/gemini/keys", response_model=GeminiKeysStatus)
+async def add_gemini_key_route(
+    payload: GeminiKeyInput,
+    db: Session = Depends(get_db),
+) -> GeminiKeysStatus:
+    """Add one more rotating Gemini key (validated first, stored encrypted)."""
+
+    if not isinstance(payload.api_key, str):
+        raise HTTPException(status_code=422, detail="Gemini API key must be a string")
+    api_key = payload.api_key.strip()
+    if not 10 <= len(api_key) <= 500:
+        raise HTTPException(status_code=422, detail="Gemini API key length is invalid")
+    discovered = await _validated_key_or_http_error(api_key)
+
+    try:
+        had_keys = bool(list_gemini_key_slots(db))
+        add_gemini_key(db, api_key)
+        SHARED_KEY_POOL.forget(api_key)
+        if not had_keys and get_preference(db, MODEL_PREFERENCE_KEY) is None:
+            set_preference(db, MODEL_PREFERENCE_KEY, discovered)
+    except (SecretStoreError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _gemini_keys_status(db)
+
+
+@router.delete("/gemini/keys/{slot}", response_model=GeminiKeysStatus)
+def remove_gemini_key_slot(slot: int, db: Session = Depends(get_db)) -> GeminiKeysStatus:
+    try:
+        if not 1 <= slot <= MAX_GEMINI_KEYS:
+            raise HTTPException(status_code=404, detail="Key slot not found")
+        value = get_gemini_key_by_slot(db, slot)
+        deleted = delete_gemini_key_slot(db, slot)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Key slot not found")
+        if value:
+            SHARED_KEY_POOL.forget(value)
+    except SecretStoreError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _gemini_keys_status(db)
 
 
 @router.put("/gemini/model", response_model=GeminiSettingStatus)
@@ -180,35 +290,47 @@ def save_gemini_model(
 @router.post("/gemini/test", response_model=GeminiSettingStatus)
 async def test_gemini_setting(db: Session = Depends(get_db)) -> GeminiSettingStatus:
     try:
-        api_key = resolve_gemini_api_key(db)
+        keys = resolve_gemini_api_keys(db)
     except SecretStoreError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if not api_key:
+    if not keys:
         raise HTTPException(status_code=409, detail="Gemini API key is not configured")
-    try:
-        await validate_gemini_api_key(api_key)
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Google Gemini validation timed out") from exc
-    except GeminiInvalidKeyError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Google این کلید را رد کرد؛ کلید ذخیرهشده معتبر نیست",
-        ) from exc
-    except (GeminiNetworkError, ModelUnavailableError) as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="سرور فعلی به سرویس Google دسترسی ندارد (شبکه/TLS/proxy)",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail="The configured Gemini key was rejected"
-        ) from exc
+    for key in keys:
+        try:
+            await validate_gemini_api_key(key)
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail="Google Gemini validation timed out"
+            ) from exc
+        except GeminiInvalidKeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"\u2022\u2022\u2022\u2022{key[-4:]}: Google \u0627\u06cc\u0646 \u06a9\u0644\u06cc\u062f \u0631\u0627 \u0631\u062f \u06a9\u0631\u062f\u061b "
+                    "\u06a9\u0644\u06cc\u062f \u0630\u062e\u06cc\u0631\u0647\u200c\u0634\u062f\u0647 \u0645\u0639\u062a\u0628\u0631 \u0646\u06cc\u0633\u062a"
+                ),
+            ) from exc
+        except (GeminiNetworkError, ModelUnavailableError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="\u0633\u0631\u0648\u0631 \u0641\u0639\u0644\u06cc \u0628\u0647 \u0633\u0631\u0648\u06cc\u0633 Google \u062f\u0633\u062a\u0631\u0633\u06cc \u0646\u062f\u0627\u0631\u062f (\u0634\u0628\u06a9\u0647/TLS/proxy)",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail="The configured Gemini key was rejected"
+            ) from exc
+        SHARED_KEY_POOL.forget(key)
     return _gemini_status(db, validated=True)
 
 
 @router.delete("/gemini", response_model=GeminiSettingStatus)
 def remove_gemini_setting(db: Session = Depends(get_db)) -> GeminiSettingStatus:
-    delete_secret(db, GEMINI_SECRET_KEY)
+    try:
+        for value in resolve_gemini_api_keys(db):
+            SHARED_KEY_POOL.forget(value)
+        delete_all_gemini_keys(db)
+    except SecretStoreError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return _gemini_status(db)
 
 
