@@ -162,3 +162,144 @@ class Playbook(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     module_name: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+class AgentConversation(TimestampMixin, Base):
+    """Conversational assistant session with cascade-deleted messages."""
+
+    __tablename__ = "agent_conversations"
+    __table_args__: ClassVar[dict[str, bool]] = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), default="گفتگوی جدید", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False, index=True)
+
+    messages: Mapped[list[AgentMessage]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="AgentMessage.created_at, AgentMessage.id",
+    )
+    action_runs: Mapped[list[AgentActionRun]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="AgentActionRun.id",
+    )
+
+
+class AgentMessage(Base):
+    __tablename__ = "agent_messages"
+    __table_args__: ClassVar[dict[str, bool]] = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    actions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    conversation: Mapped[AgentConversation] = relationship(back_populates="messages")
+
+
+class AgentActionRun(Base):
+    """Audit + idempotency record for every function call executed by the assistant."""
+
+    __tablename__ = "agent_action_runs"
+    __table_args__ = (
+        Index("ix_agent_action_runs_conversation", "conversation_id", "created_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    step_id: Mapped[int | None] = mapped_column(
+        ForeignKey("steps.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    provider_call_id: Mapped[str] = mapped_column(
+        String(128), unique=True, nullable=False, index=True
+    )
+    action_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
+    result: Mapped[Any | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    conversation: Mapped[AgentConversation] = relationship(back_populates="action_runs")
+
+
+class AppPreference(Base):
+    """Non-secret, server-side key/value preferences (model, reminder window...)."""
+
+    __tablename__ = "app_preferences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    preference_key: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class ContactEndpoint(TimestampMixin, Base):
+    """Generic outbound contact endpoints (channel + address) per owner."""
+
+    __tablename__ = "contact_endpoints"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_type",
+            "owner_id",
+            "channel",
+            "address",
+            name="uq_contact_endpoint_owner_channel_address",
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    owner_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    channel: Mapped[str] = mapped_column(String(32), default="telegram", nullable=False)
+    address: Mapped[str] = mapped_column(String(255), nullable=False)  # Telegram chat_id
+    label: Mapped[str | None] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class OutboundMessage(TimestampMixin, Base):
+    """Outbound message lifecycle with provider receipts and idempotency."""
+
+    __tablename__ = "outbound_messages"
+    __table_args__: ClassVar[dict[str, bool]] = {"sqlite_autoincrement": True}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_type: Mapped[str | None] = mapped_column(String(32), index=True)
+    owner_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    contact_endpoint_id: Mapped[int | None] = mapped_column(
+        ForeignKey("contact_endpoints.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    channel: Mapped[str] = mapped_column(String(32), default="telegram", nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    provider_response: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(128), unique=True, nullable=False, index=True
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    contact_endpoint: Mapped[ContactEndpoint | None] = relationship()

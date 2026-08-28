@@ -22,6 +22,7 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { ConfirmDialog } from "./ui/dialog";
 import { Input, Select } from "./ui/input";
 import { PanelTitle } from "./PanelTitle";
+import { AssistantConnections } from "./AssistantConnections";
 
 export function SettingsPanel({
   status = {},
@@ -136,7 +137,7 @@ export function SettingsPanel({
           icon={Bot}
           title="مدل استدلال"
           value={status.gemini_configured ? "آماده" : "نیازمند کلید"}
-          helper={status.reasoning_model || "gemini-2.5-flash"}
+          helper={status.reasoning_model || "gemini-3.7-flash"}
           ready={status.gemini_configured}
           warning
         />

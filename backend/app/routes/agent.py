@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from ..agent.ai_client import AIClient, get_ai_client
+from ..agent.ai_client import AIConfigurationError, ChatClient, get_ai_client
 from ..agent.executor import ExecutionError, execute_task
 from ..agent.planner import PlanningError, decompose_task
 from ..database import get_db
-from ..models import AILog, Step, Task, utcnow
+from ..models import AgentActionRun, AILog, Step, Task, utcnow
 from ..schemas import StepRead, TaskDetail
 
 router = APIRouter(tags=["agent"])
@@ -29,13 +29,15 @@ def _task_detail(db: Session, task_id: int) -> Task:
 async def plan_task(
     task_id: int,
     db: Session = Depends(get_db),
-    ai_client: AIClient = Depends(get_ai_client),
+    ai_client: ChatClient = Depends(get_ai_client),
 ):
     task = db.get(Task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     try:
         return await decompose_task(db, task, ai_client)
+    except AIConfigurationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PlanningError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -84,6 +86,11 @@ def reject_step(step_id: int, db: Session = Depends(get_db)) -> Task:
     step.status = "cancelled"
     step.error = "Rejected by user"
     step.task.status = "cancelled"
+    action_run = db.scalar(select(AgentActionRun).where(AgentActionRun.step_id == step.id).limit(1))
+    if action_run is not None and action_run.status == "needs_approval":
+        action_run.status = "failed"
+        action_run.error = "Rejected by user"
+        action_run.finished_at = utcnow()
     db.commit()
     return _task_detail(db, step.task_id)
 

@@ -17,7 +17,9 @@ async def test_system_status_reports_capabilities_without_secrets(client, monkey
     assert body["api_ready"] is True
     assert body["gemini_configured"] is True
     assert body["embedding_backend"] == "gemini"
-    assert body["reasoning_model"] == "gemini-2.5-flash"
+    assert body["reasoning_model"] == "gemini-3.7-flash"
+    assert body["default_model"] == "gemini-3.7-flash"
+    assert body["telegram_configured"] is False
     assert body["timezone"] == "Asia/Tehran"
     assert "test-secret-that-must-not-leak" not in response.text
 

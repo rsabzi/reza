@@ -61,9 +61,19 @@ Backend ابتدا کلید را مستقیماً با Google بررسی می‌
 
 ```dotenv
 GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-3.7-flash
+TELEGRAM_BOT_TOKEN=
 EMBEDDING_BACKEND=auto
 AGENT_TIMEZONE=Asia/Tehran
 ```
+
+### مدل Gemini
+
+- Default پایدار فعلی: `gemini-3.7-flash` (با `GEMINI_MODEL` یا تنظیم Dashboard قابل تغییر است).
+- مدت‌هاست `gemini-2.5-flash` Hard-coded حذف شده و همه مسیرهای runtime (گفتگو و Planner) از **Interactions API** (نه `generateContent`) استفاده می‌کنند.
+- اگر مدل انتخابی با `404 / no longer available` جواب دهد، همان مدل دوباره Retry نمی‌شود و به گزینه بعدی از زنجیره `gemini-3.7-flash ← 3.6 ← 3.5 ← 3.1-flash-lite ← 2.5-flash ← gemini-flash-latest` می‌رویم؛ مدل موفق در پاسخ status نمایش داده می‌شود.
+- Timeout/Rate limit با Backoff و حداکثر ۳ تلاش مدیریت می‌شوند و هر تلاش در `AILog` ثبت می‌شود.
+- اعتبارسنجی کلید مستقل از مدل است (با کشف مدل‌ها) و اولین مدل سازگار را برمی‌گرداند.
 
 رفتار embedding:
 
@@ -73,7 +83,7 @@ AGENT_TIMEZONE=Asia/Tehran
 | `gemini` | Gemini را اجباری می‌کند و در نبود/خطای کلید پاسخ شفاف 502 می‌دهد |
 | `local` | کاملاً آفلاین، سریع و مناسب تست؛ کیفیت معنایی محدودتر از Gemini |
 
-استدلال و برنامه‌ریزی همیشه با `gemini-2.5-flash` انجام می‌شود و بدون کلید با خطای کنترل‌شده متوقف می‌شود؛ خروجی ساختگی تولید نمی‌شود.
+استدلال و برنامه‌ریزی با مدل پیکربندی‌شده (`GEMINI_MODEL` یا ترجیح Dashboard) و از طریق Interactions API انجام می‌شود؛ بدون کلید با خطای کنترل‌شده (۴۰۹/۵۰۲) متوقف می‌شود و خروجی ساختگی تولید نمی‌شود.
 
 ## اجرای تست‌ها
 
@@ -91,7 +101,23 @@ npm run build --prefix frontend
 npm audit --prefix frontend
 ```
 
-آخرین اجرای ثبت‌شده: **۵۱ تست Backend + ۲۲ تست Frontend، همگی پاس؛ Build موفق؛ صفر آسیب‌پذیری npm**. علاوه بر تست‌های خودکار، تمام ۹ نمای اصلی در Chromium واقعی بازبینی شده‌اند و جریان ساخت تسک دستی و تأیید/ادامه Executor از داخل مرورگر به‌صورت end-to-end اجرا شده است. جزئیات فازها در `PHASE_1_REPORT.md` تا `PHASE_9_REPORT.md` و گزارش بازطراحی در `REDESIGN_REPORT.md` موجود است.
+آخرین اجرای ثبت‌شده: **۷۲ تست Backend + ۲۹ تست Frontend، همگی پاس؛ Build موفق؛ صفر آسیب‌پذیری npm**؛ جریان‌های عامل (ساخت سالن و تسک، تأیید حذف، ارسال تلگرام، fallback مدل) با Provider Mock و در سطح API پوشش داده شده‌اند. جزئیات در [`AGENTIC_UPGRADE_REPORT.md`](AGENTIC_UPGRADE_REPORT.md) و گزارش فازهای قبلی موجود است.
+
+## «همراه من» — دستیار مکالمه‌ای
+
+- صفحه پیش‌فرض Dashboard است: «سلام، من همراه‌ات هستم. امروز چه کاری می‌خواهی برایت انجام بدهم؟»
+- دستور فارسی بده؛ همراه با Function Call ابزار واقعی را اجرا می‌کند (مثلاً `create_salon` یک ردیف واقعی در CRM می‌سازد) و بعد از موفقیت، نتیجه و شناسه رکورد را گزارش می‌دهد.
+- حذف رکورد، آماده‌سازی Outreach/پروپوزال و ارسال واقعی تلگرام فقط از مسیر تأیید (مرکز تأیید) اجرا می‌شوند؛ هیچ Delete/Send قبل از Approve انجام نمی‌شود.
+- هر Function Call در `AgentActionRun` با `provider_call_id` یکتا ثبت می‌شود تا Retry یا Approve دوباره آن را اجرا نکند.
+- Context محدود و واقعی است (تسک‌ها، تأییدهای باز، پلن سالن‌ها، پروژه‌های نزدیک موعد، ۳–۵ حافظه و سیاست ابزارها) و تمام دیتابیس داخل Prompt نمی‌رود.
+- هر فراخوانی AI با `store=False` انجام می‌شود؛ تاریخچه فقط محلی ذخیره می‌شود.
+
+### تنظیم تلگرام
+
+- در **تنظیمات ← اتصال تلگرام** توکن Bot را ثبت کن؛ Backend اول با `getMe` تست و سپس Fernet-رمز می‌کند و فقط Hint ۴ کاراکتری برمی‌گرداند.
+- مخاطب (chat_id) در جدول عمومی `contact_endpoints` با `owner_type` (salon/project/general) ثبت می‌شود.
+- `send_telegram_message` ابتدا `OutboundMessage` با `needs_approval` می‌سازد؛ پس از Approve دقیقاً یک `sendMessage` فراخوانی می‌شود و فقط با `result.message_id` وضعیت `sent` و Receipt ذخیره می‌شود.
+
 
 ## پیش‌نمایش رابط کاربری
 
@@ -104,11 +130,12 @@ npm audit --prefix frontend
 ```text
 backend/
   app/
-    agent/                 # Planner و Executor عمومی
+    agent/                 # Interactions API client (fallback مدل) + Planner/Executor
+    assistant/             # لایه Composition: loop گفتگو، dispatcher، context، ابزارها
     memory/                # embedding، chunking و vector store
     tools/registry.py      # رجیستری عمومی و مستقل از ماژول
-    services/              # لایه مجوز ابزار
-    routes/                # APIهای Core
+    services/              # secrets (Fernet)، telegram، preferences، permissions
+    routes/                # APIهای Core + assistant/contacts/outbound
     modules/
       salon/               # مدل، API، سرویس و ابزار سالن
       personal/            # مدل، API، سرویس و ابزار شخصی
@@ -117,10 +144,10 @@ backend/
     schemas.py
     scheduler.py
     main.py
-  tests/                   # تست‌های فاز ۱ تا ۷
+  tests/                   # تست‌های فاز ۱ تا ۷ + agentic upgrade
 frontend/
   src/
-    components/            # پنل‌ها و UI primitives
+    components/            # CompanionPanel، Settings، پنل‌های ماژول
     lib/api.js             # کلاینت نسبی /api
     test/                  # Vitest + RTL
 setup.sh / setup.bat
@@ -136,6 +163,10 @@ Core هیچ reference اختصاصی به سالن یا پروژه شخصی ند
 | Tasks | `POST/GET /api/tasks`, `GET/PATCH/DELETE /api/tasks/{id}` |
 | Steps | `POST/GET /api/steps`, `POST /api/steps/{id}/approve`, `.../reject` |
 | Agent | `POST /api/tasks/{id}/plan`, `POST /api/tasks/{id}/execute` |
+| همراه | `POST /api/assistant/chat`, `GET/POST /api/assistant/conversations`, `GET/DELETE .../{id}`, `POST .../{id}/archive` |
+| Contacts | `GET/POST /api/contacts`, `PATCH/DELETE /api/contacts/{id}` |
+| Outbound | `GET /api/outbound-messages` (Receipt و Status) |
+| Telegram | `GET/PUT/DELETE /api/settings/telegram`, `POST /api/settings/telegram/test` |
 | Tools | `GET /api/tools`, `PATCH /api/tools/{name}`, `POST .../{name}/invoke` |
 | Memory | `POST/GET /api/playbooks`, `GET /api/memory`, `GET /api/memory/search` |
 | Scheduler | `POST /api/tasks/{id}/run-now`, `POST /api/scheduler/run-due` |
@@ -154,4 +185,4 @@ Core هیچ reference اختصاصی به سالن یا پروژه شخصی ند
 
 ## وضعیت پذیرش خارجی
 
-تمام تست‌ها و بررسی‌های لوکال اجرا شده‌اند. تنها بررسی‌ای که در محیط ساخت قابل انجام نبود، اجرای دستی واقعی Gemini است، چون هیچ کلید Gemini در runner تنظیم نشده بود. این مورد صریح و با فرمان بازآزمایی در [`PHASE_4_REPORT.md`](PHASE_4_REPORT.md) ثبت شده است.
+تمام تست‌ها و بررسی‌های لوکال اجرا شده‌اند. چون هیچ Credential واقعی Gemini/Telegram در محیط ساخت موجود نیست، Providerها در تست‌های خودکار Mock شده‌اند و هیچ خروجی واقعی جعل نشده است؛ فرمان‌های Verification دستی در [`AGENTIC_UPGRADE_REPORT.md`](AGENTIC_UPGRADE_REPORT.md) آمده‌اند.

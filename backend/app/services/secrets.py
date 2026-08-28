@@ -14,6 +14,7 @@ from ..database import SessionLocal
 from ..models import AppSetting
 
 GEMINI_SECRET_KEY = "gemini_api_key"
+TELEGRAM_SECRET_KEY = "telegram_bot_token"
 
 
 class SecretStoreError(RuntimeError):
@@ -127,3 +128,37 @@ def gemini_secret_status(db: Session) -> dict[str, str | bool | None]:
         "source": "environment" if environment_key else "none",
         "hint": f"••••{environment_key[-4:]}" if environment_key else None,
     }
+
+
+def telegram_secret_status(db: Session) -> dict[str, str | bool | None]:
+    """Report Telegram bot configuration without ever exposing the token."""
+
+    record = db.scalar(select(AppSetting).where(AppSetting.setting_key == TELEGRAM_SECRET_KEY))
+    if record is not None:
+        # Decrypt once so a missing/wrong master key is reported as not ready.
+        get_secret(db, TELEGRAM_SECRET_KEY)
+        return {"configured": True, "source": "dashboard", "hint": record.value_hint}
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or ""
+    return {
+        "configured": bool(token),
+        "source": "environment" if token else "none",
+        "hint": f"••••{token[-4:]}" if token else None,
+    }
+
+
+def resolve_telegram_bot_token(db: Session | None = None) -> str | None:
+    if db is not None:
+        return (
+            get_secret(db, TELEGRAM_SECRET_KEY)
+            or os.getenv("TELEGRAM_BOT_TOKEN")
+            or os.getenv("TELEGRAM_TOKEN")
+        )
+    try:
+        with SessionLocal() as session:
+            return (
+                get_secret(session, TELEGRAM_SECRET_KEY)
+                or os.getenv("TELEGRAM_BOT_TOKEN")
+                or os.getenv("TELEGRAM_TOKEN")
+            )
+    except OperationalError:
+        return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")

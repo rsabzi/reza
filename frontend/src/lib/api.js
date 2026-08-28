@@ -62,10 +62,48 @@ export const api = {
   schedulerStatus: () => request("/scheduler/status"),
   getGeminiSetting: () => request("/settings/gemini"),
   saveGeminiKey: (apiKey) =>
-    request("/settings/gemini", json("PUT", { api_key: apiKey }, 30000)),
+    request("/settings/gemini", json("PUT", { api_key: apiKey }, 45000)),
+  setGeminiModel: (model) =>
+    request("/settings/gemini/model", json("PUT", { model }, 15000)),
   testGeminiKey: () =>
-    request("/settings/gemini/test", { method: "POST", timeout: 30000 }),
+    request("/settings/gemini/test", { method: "POST", timeout: 45000 }),
   removeGeminiKey: () => request("/settings/gemini", { method: "DELETE" }),
+
+  getTelegramSetting: () => request("/settings/telegram"),
+  saveTelegramToken: (botToken) =>
+    request("/settings/telegram", json("PUT", { bot_token: botToken }, 30000)),
+  testTelegramToken: () =>
+    request("/settings/telegram/test", { method: "POST", timeout: 30000 }),
+  removeTelegramToken: () =>
+    request("/settings/telegram", { method: "DELETE" }),
+  getReminderWindow: () => request("/settings/reminder-window"),
+  setReminderWindow: (days) =>
+    request("/settings/reminder-window", json("PUT", { days })),
+
+  assistantChat: (payload) =>
+    request("/assistant/chat", json("POST", payload, 90000)),
+  listConversations: () => request("/assistant/conversations"),
+  createConversation: (title) =>
+    request("/assistant/conversations", json("POST", { title })),
+  getConversation: (id) => request(`/assistant/conversations/${id}`),
+  deleteConversation: (id) =>
+    request(`/assistant/conversations/${id}`, { method: "DELETE" }),
+  archiveConversation: (id) =>
+    request(`/assistant/conversations/${id}/archive`, { method: "POST" }),
+  listActionRuns: (conversationId) =>
+    request(
+      `/assistant/actions${conversationId ? `?conversation_id=${conversationId}` : ""}`,
+    ),
+
+  listContacts: () => request("/contacts"),
+  createContact: (payload) => request("/contacts", json("POST", payload)),
+  updateContact: (id, payload) =>
+    request(`/contacts/${id}`, json("PATCH", payload)),
+  deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),
+
+  listOutboundMessages: (status) =>
+    request(`/outbound-messages${status ? `?status=${status}` : ""}`),
+  getOutboundMessage: (id) => request(`/outbound-messages/${id}`),
 
   listTasks: () => request("/tasks"),
   getTask: (id) => request(`/tasks/${id}`),

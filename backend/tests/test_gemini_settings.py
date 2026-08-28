@@ -40,20 +40,20 @@ async def test_dashboard_can_validate_save_test_and_remove_gemini_key(
     monkeypatch.setenv("AGENT_MASTER_KEY_FILE", str(tmp_path / "master.key"))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    validator = AsyncMock(return_value="models/gemini-2.5-flash")
+    validator = AsyncMock(return_value="gemini-3.7-flash")
     monkeypatch.setattr("backend.app.routes.settings.validate_gemini_api_key", validator)
     raw_key = "valid-dashboard-gemini-auth-key-9876"
 
     saved = await client.put("/api/settings/gemini", json={"api_key": raw_key})
 
     assert saved.status_code == 200
-    assert saved.json() == {
-        "configured": True,
-        "source": "dashboard",
-        "hint": "••••9876",
-        "validated": True,
-        "model": "gemini-2.5-flash",
-    }
+    body = saved.json()
+    assert body["configured"] is True
+    assert body["source"] == "dashboard"
+    assert body["hint"] == "••••9876"
+    assert body["validated"] is True
+    assert body["model"] == "gemini-3.7-flash"
+    assert body["models"][0] == "gemini-3.7-flash"
     assert raw_key not in saved.text
     record = db.scalar(select(AppSetting).where(AppSetting.setting_key == GEMINI_SECRET_KEY))
     assert record is not None

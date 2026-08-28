@@ -23,6 +23,7 @@ import {
 import { api } from "./lib/api";
 import { cn } from "./lib/utils";
 import { ApprovalQueue } from "./components/ApprovalQueue";
+import { CompanionPanel } from "./components/CompanionPanel";
 import {
   CommandPalette,
   NotificationPopover,
@@ -40,6 +41,7 @@ import { ToolsPanel } from "./components/ToolsPanel";
 import { Button } from "./components/ui/button";
 
 const coreNavigation = [
+  { id: "companion", label: "همراه من", icon: Bot },
   { id: "overview", label: "نمای کلی", icon: LayoutDashboard },
   { id: "tasks", label: "تسک‌ها", icon: ListTodo },
   {
@@ -57,6 +59,7 @@ const skillNavigation = [
   { id: "personal", label: "پروژه‌های شخصی", icon: BriefcaseBusiness },
 ];
 const panelTitles = {
+  companion: "همراه من",
   overview: "نمای کلی",
   tasks: "تسک‌ها",
   detail: "جزئیات تسک",
@@ -83,7 +86,7 @@ const initialData = {
 };
 
 export default function App() {
-  const [active, setActive] = useState("overview");
+  const [active, setActive] = useState("companion");
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -327,6 +330,15 @@ export default function App() {
   );
 
   const panels = {
+    companion: (
+      <CompanionPanel
+        system={data.system}
+        approvals={data.approvals.length}
+        onNavigate={navigate}
+        onChanged={() => loadDashboard(true)}
+        notify={notify}
+      />
+    ),
     overview: (
       <OverviewDashboard
         data={data}
@@ -512,7 +524,7 @@ function Sidebar({
     >
       <div className="flex h-[76px] shrink-0 items-center justify-between border-b border-line/50 px-5">
         <button
-          onClick={() => onNavigate("overview")}
+          onClick={() => onNavigate("companion")}
           className="flex items-center gap-3 text-right"
         >
           <span className="relative grid size-10 place-items-center rounded-[14px] bg-gradient-to-br from-[#9178ff] to-[#5d3bdb] text-white shadow-[0_10px_35px_rgba(124,92,255,.32)]">
@@ -767,7 +779,7 @@ function MobileNav({ active, approvals, onNavigate, hidden = false }) {
   if (hidden) return null;
   const items = [
     coreNavigation[0],
-    coreNavigation[1],
+    { id: "tasks", label: "تسک‌ها", icon: ListTodo },
     coreNavigation[2],
     skillNavigation[0],
     skillNavigation[1],
