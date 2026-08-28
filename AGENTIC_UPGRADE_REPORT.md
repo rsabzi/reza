@@ -1,6 +1,7 @@
 # گزارش ارتقای Agentic — «همراه من»
 
-- **Branch:** `arena/01a046a3-reza` (PR از همین branch)
+- **Branch:** `arena/01a046a3-reza`
+- **PR:** https://github.com/rsabzi/reza/pull/2
 - **مبنا:** `aacc744` (Merge PR #1 روی `main`)
 - **تاریخ:** 2026-08-28
 - **وضعیت:** تمام تست‌های Backend/Frontend، Build، Audit، Lint و Setup بررسی و پاس شدند.
