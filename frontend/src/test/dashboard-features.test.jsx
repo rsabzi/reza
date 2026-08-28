@@ -187,15 +187,23 @@ test("Task detail can add a manual step without Gemini", async () => {
 test("Settings panel validates and stores Gemini key through Backend", async () => {
   const user = userEvent.setup();
   const rawKey = "dashboard-auth-key-that-stays-server-side-9876";
-  const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(
-    response({
+  const subPanels = {
+    "/api/settings/telegram": { configured: false, source: "none", hint: null },
+    "/api/contacts": [],
+    "/api/outbound-messages": [],
+    "/api/custom-schema": { tables: [], views: [] },
+  };
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
+    if (url in subPanels) return response(subPanels[url]);
+    return response({
       configured: true,
       source: "dashboard",
       hint: "••••9876",
       validated: true,
-      model: "gemini-2.5-flash",
-    }),
-  );
+      model: "gemini-3.7-flash",
+      models: ["gemini-3.7-flash"],
+    });
+  });
   const onStatusChanged = vi.fn().mockResolvedValue(undefined);
   const notify = vi.fn();
   render(
@@ -212,13 +220,12 @@ test("Settings panel validates and stores Gemini key through Backend", async () 
   );
 
   await waitFor(() => expect(onStatusChanged).toHaveBeenCalled());
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/api/settings/gemini",
-    expect.objectContaining({ method: "PUT" }),
+  const geminiCall = fetchMock.mock.calls.find(
+    (call) => call[0] === "/api/settings/gemini",
   );
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-    api_key: rawKey,
-  });
+  expect(geminiCall).toBeDefined();
+  expect(geminiCall[1]).toEqual(expect.objectContaining({ method: "PUT" }));
+  expect(JSON.parse(geminiCall[1].body)).toEqual({ api_key: rawKey });
   expect(screen.getByLabelText("کلید API جمنای")).toHaveValue("");
   expect(notify).toHaveBeenCalledWith(
     "کلید توسط Google تأیید و به‌صورت رمز‌شده ذخیره شد",
@@ -229,9 +236,16 @@ test("Settings panel validates and stores Gemini key through Backend", async () 
 test("Settings panel tests the live API connection", async () => {
   const user = userEvent.setup();
   const notify = vi.fn();
+  const responses = {
+    "/api/settings/telegram": { configured: false, source: "none", hint: null },
+    "/api/contacts": [],
+    "/api/outbound-messages": [],
+    "/api/custom-schema": { tables: [], views: [] },
+    "/api/health": { status: "ok" },
+  };
   const fetchMock = vi
     .spyOn(globalThis, "fetch")
-    .mockReturnValue(response({ status: "ok" }));
+    .mockImplementation((url) => response(responses[url] || {}));
   render(<SettingsPanel status={{ api_ready: true }} notify={notify} />);
 
   await user.click(screen.getByRole("button", { name: /آزمایش ارتباط واقعی/ }));

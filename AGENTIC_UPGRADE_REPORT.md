@@ -66,6 +66,9 @@
   `read_secret` وجود ندارد و خطاهای Provider قبل از ذخیره Redact می‌شوند.
 - **Migration:** فقط جدول‌های جدید اضافه شده‌اند (`create_all` در startup)؛
   داده موجود پاک نمی‌شود.
+- **گزارش سفارشی (بعد از PR):** ابزارهای `create_custom_table` / `prepare_report_view` /
+  `list_custom_schema` + API مدیریتی `/api/custom-schema`؛ فقط Allowlist، بدون SQL خام،
+  ساخت برای Agent نیازمند تأیید، بازسازی Idempotent در Startup و حذف تأییدمحور.
 
 ---
 
@@ -111,7 +114,7 @@
 
 ```bash
 EMBEDDING_BACKEND=local .venv/bin/python -m pytest -v
-# 74 passed (51 قبلی + 23 جدید/به‌روز)
+# 82 passed (51 قبلی + 31 جدید/به‌روز)
 ```
 پوشش‌های جدید (خلاصه):
 - Interactions API و مدل جدید در Planner/Chat
@@ -131,7 +134,7 @@ EMBEDDING_BACKEND=local .venv/bin/python -m pytest -v
   دقیقاً یک sendMessage بعد از Approve + Receipt؛ failure ⇒ `failed` بدون Crash
 
 ```bash
-npm test --prefix frontend           # 30 passed (22 قبلی + 8 جدید)
+npm test --prefix frontend           # 34 passed (22 قبلی + 12 جدید)
 npm run build --prefix frontend      # ✓ (dist ساخته شد)
 npm audit --prefix frontend          # 0 vulnerabilities
 ruff format --check backend          # ✓

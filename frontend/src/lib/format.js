@@ -69,6 +69,9 @@ export const toolLabels = {
   search_memory: "جستجوی حافظه",
   list_tools_and_policies: "ابزارها و سیاست‌ها",
   summarize_recent_results: "خلاصه نتایج اخیر",
+  create_custom_table: "ساخت جدول سفارشی",
+  prepare_report_view: "آماده‌سازی نمای گزارش",
+  list_custom_schema: "گزارش‌های سفارشی",
 };
 
 export const sourceLabels = {

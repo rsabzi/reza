@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..custom_schema import CustomSchemaError, prevalidate_request
 from ..models import AgentActionRun, Step, Task, Tool, utcnow
 from ..services.permissions import ToolDisabledError, ToolNotFoundError, get_tool_record
 from ..services.secrets import GEMINI_SECRET_KEY, TELEGRAM_SECRET_KEY, get_secret
@@ -37,6 +38,9 @@ ACTION_LABELS = {
     "schedule_task": "زمان‌بندی تسک",
     "add_task_step": "افزودن مرحله تسک",
     "run_task": "اجرای تسک",
+    "create_custom_table": "ساخت جدول سفارشی",
+    "prepare_report_view": "آماده‌سازی نمای گزارش",
+    "list_custom_schema": "گزارش‌های سفارشی",
 }
 
 
@@ -213,7 +217,8 @@ async def execute_action(
 
     try:
         validate_tool_arguments(registered, dict(arguments or {}))
-    except ValueError as exc:
+        prevalidate_request(action_name, dict(arguments or {}))
+    except (ValueError, CustomSchemaError) as exc:
         safe = redact_secrets(db, str(exc))
         action = {
             "name": action_name,

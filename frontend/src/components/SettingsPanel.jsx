@@ -23,6 +23,7 @@ import { ConfirmDialog } from "./ui/dialog";
 import { Input, Select } from "./ui/input";
 import { PanelTitle } from "./PanelTitle";
 import { AssistantConnections } from "./AssistantConnections";
+import { CustomSchemaPanel } from "./CustomSchemaPanel";
 
 export function SettingsPanel({
   status = {},
@@ -368,6 +369,16 @@ export function SettingsPanel({
             </Button>
           </CardContent>
         </Card>
+      </div>
+
+      <AssistantConnections
+        status={status}
+        notify={notify}
+        onStatusChanged={onStatusChanged}
+      />
+
+      <div className="mt-5" data-testid="settings-custom-schema">
+        <CustomSchemaPanel notify={notify} />
       </div>
 
       <ConfirmDialog

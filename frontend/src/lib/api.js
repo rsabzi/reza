@@ -101,6 +101,22 @@ export const api = {
     request(`/contacts/${id}`, json("PATCH", payload)),
   deleteContact: (id) => request(`/contacts/${id}`, { method: "DELETE" }),
 
+  listCustomSchema: () => request("/custom-schema"),
+  createCustomTable: (payload) =>
+    request("/custom-schema/tables", json("POST", payload, 45000)),
+  createCustomView: (payload) =>
+    request("/custom-schema/views", json("POST", payload, 45000)),
+  customSchemaRows: (kind, name, limit = 50) =>
+    request(
+      `/custom-schema/${kind}/${encodeURIComponent(name)}/rows?limit=${limit}`,
+    ),
+  deleteCustomSchema: (kind, name) => {
+    // eslint-disable-next-line no-useless-escape
+    return request(`/custom-schema/${kind}/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+  },
+
   listOutboundMessages: (status) =>
     request(`/outbound-messages${status ? `?status=${status}` : ""}`),
   getOutboundMessage: (id) => request(`/outbound-messages/${id}`),

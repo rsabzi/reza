@@ -15,10 +15,19 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from ..custom_schema import (
+    CustomSchemaError,
+    create_custom_table,
+    drop_custom_object,
+    list_custom_schema,
+    prepare_report_view,
+)
 from ..memory.store import create_playbook_with_chunks
 from ..memory.store import search_memory as search_memory_store
 from ..models import (
     ContactEndpoint,
+    CustomTableDefinition,
+    CustomViewDefinition,
     MemoryEntry,
     OutboundMessage,
     Playbook,
@@ -104,11 +113,13 @@ def _resource(db: Session, resource_type: str, resource_id: int) -> Any:
         "playbook": Playbook,
         "contact_endpoint": ContactEndpoint,
         "outbound_message": OutboundMessage,
+        "custom_table": CustomTableDefinition,
+        "custom_view": CustomViewDefinition,
     }.get(resource_type)
     if model is None:
         raise ValueError(
             "Unsupported resource_type; use one of: task, salon, project, memory, "
-            "playbook, contact_endpoint, outbound_message"
+            "playbook, contact_endpoint, outbound_message, custom_table, custom_view"
         )
     return db.get(model, resource_id)
 
@@ -151,6 +162,27 @@ def _resource_summary(db: Session, resource_type: str, resource_id: int) -> dict
                 "module_name": resource.module_name,
             },
         }
+    if resource_type == "custom_table":
+        return {
+            "resource_type": "custom_table",
+            "resource_id": resource_id,
+            "item": {
+                "name": resource.table_name,
+                "columns": resource.columns,
+                "purpose": resource.purpose,
+            },
+        }
+    if resource_type == "custom_view":
+        return {
+            "resource_type": "custom_view",
+            "resource_id": resource_id,
+            "item": {
+                "name": resource.view_name,
+                "source": resource.source,
+                "columns": resource.columns,
+                "purpose": resource.purpose,
+            },
+        }
     if resource_type == "contact_endpoint":
         return {
             "resource_type": "contact_endpoint",
@@ -181,6 +213,13 @@ def _delete_resource(db: Session, resource_type: str, resource_id: int) -> dict[
     resource = _resource(db, resource_type, resource_id)
     if resource is None:
         raise ValueError(f"{resource_type} with id {resource_id} was not found")
+    if resource_type in {"custom_table", "custom_view"}:
+        dropped = drop_custom_object(
+            db,
+            kind=resource_type,
+            name=resource.table_name if resource_type == "custom_table" else resource.view_name,
+        )
+        return {"deleted": True, **dropped}
     if resource_type == "playbook":
         db.execute(
             delete(MemoryEntry).where(
@@ -1169,6 +1208,77 @@ async def send_telegram_message_tool(
         "provider_message_id": provider_message_id,
         "receipt": {"ok": True, "message_id": provider_message_id},
     }
+
+
+@register_tool(
+    "create_custom_table",
+    "Create an allowlisted custom report table; name must start with custom_ and columns use "
+    "allowed types only. Always requires approval; DDL is generated from the allowlist, "
+    "never from raw SQL.",
+    requires_approval=True,
+)
+def create_custom_table_tool(
+    context: ToolContext,
+    table_name: str,
+    columns: list[dict[str, Any]],
+    purpose: str | None = None,
+    replace: bool = False,
+) -> dict[str, Any]:
+    try:
+        return create_custom_table(
+            context.db,
+            table_name=table_name,
+            columns=columns,
+            purpose=purpose,
+            replace=bool(replace),
+        )
+    except CustomSchemaError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+@register_tool(
+    "prepare_report_view",
+    "Prepare a read-only report view (name starts with report_) over allowlisted source tables, "
+    "columns and filters; aggregates are limited to count/sum/avg/min/max. Always requires "
+    "approval and no raw SQL is accepted.",
+    requires_approval=True,
+)
+def prepare_report_view_tool(
+    context: ToolContext,
+    view_name: str,
+    source: str,
+    columns: list[str],
+    filters: list[dict[str, Any]] | None = None,
+    aggregate: dict[str, Any] | None = None,
+    order_by: str | None = None,
+    limit: int | None = None,
+    purpose: str | None = None,
+    replace: bool = False,
+) -> dict[str, Any]:
+    try:
+        return prepare_report_view(
+            context.db,
+            view_name=view_name,
+            source=source,
+            columns=columns,
+            filters=filters,
+            aggregate=aggregate,
+            order_by=order_by,
+            limit=limit,
+            purpose=purpose,
+            replace=bool(replace),
+        )
+    except CustomSchemaError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+@register_tool(
+    "list_custom_schema",
+    "List custom report tables and views with their column definitions.",
+    requires_approval=False,
+)
+def list_custom_schema_tool(context: ToolContext) -> dict[str, Any]:
+    return list_custom_schema(context.db)
 
 
 def queue_outbound_message(

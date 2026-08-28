@@ -303,3 +303,30 @@ class OutboundMessage(TimestampMixin, Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     contact_endpoint: Mapped[ContactEndpoint | None] = relationship()
+
+
+class CustomTableDefinition(TimestampMixin, Base):
+    """Audit record for a user-created custom table (DDL is code-generated)."""
+
+    __tablename__ = "custom_table_definitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    columns: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    purpose: Mapped[str | None] = mapped_column(Text)
+
+
+class CustomViewDefinition(TimestampMixin, Base):
+    """Audit record for a read-only report view."""
+
+    __tablename__ = "custom_view_definitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    view_name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    columns: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    filters: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    aggregate: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    order_by: Mapped[str | None] = mapped_column(String(64))
+    limit: Mapped[int | None] = mapped_column(Integer)
+    purpose: Mapped[str | None] = mapped_column(Text)

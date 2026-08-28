@@ -112,6 +112,13 @@ npm audit --prefix frontend
 - Context محدود و واقعی است (تسک‌ها، تأییدهای باز، پلن سالن‌ها، پروژه‌های نزدیک موعد، ۳–۵ حافظه و سیاست ابزارها) و تمام دیتابیس داخل Prompt نمی‌رود.
 - هر فراخوانی AI با `store=False` انجام می‌شود؛ تاریخچه فقط محلی ذخیره می‌شود.
 
+### جدول‌ها و نماهای گزارش سفارشی (با تأیید + Allowlist)
+
+- ابزارهای `create_custom_table` (نام `custom_*`) و `prepare_report_view` (نام `report_*`) از طریق «همراه» یا API مدیریتی `/api/custom-schema` در دسترس‌اند.
+- نام جدول/نما، ستون‌ها، نوع‌ها (text/integer/real/boolean/date/datetime)، جدول مبدأ، ستون‌ها و فیلترها همگی از Allowlist عبور می‌کنند و **هیچ SQL خامی پذیرفته نمی‌شود**؛ DDL و View از SQLAlchemy تولید می‌شود.
+- ساخت توسط Agent فقط با تأیید انجام می‌شود؛ حذف هم مثل بقیه رکوردها از «حذف رکورد» و نیازمند تأیید است.
+- تعریف‌ها در `custom_table_definitions` و `custom_view_definitions` ذخیره و در هر Startup به‌صورت Idempotent بازسازی می‌شوند (بدون آسیب به داده موجود).
+
 ### تنظیم تلگرام
 
 - در **تنظیمات ← اتصال تلگرام** توکن Bot را ثبت کن؛ Backend اول با `getMe` تست و سپس Fernet-رمز می‌کند و فقط Hint ۴ کاراکتری برمی‌گرداند.
@@ -165,6 +172,7 @@ Core هیچ reference اختصاصی به سالن یا پروژه شخصی ند
 | Agent | `POST /api/tasks/{id}/plan`, `POST /api/tasks/{id}/execute` |
 | همراه | `POST /api/assistant/chat`, `GET/POST /api/assistant/conversations`, `GET/DELETE .../{id}`, `POST .../{id}/archive` |
 | Contacts | `GET/POST /api/contacts`, `PATCH/DELETE /api/contacts/{id}` |
+| گزارش سفارشی | `GET/POST /api/custom-schema/tables`, `.../views`, `GET /api/custom-schema/{kind}/{name}/rows`, `DELETE /api/custom-schema/{kind}/{name}` |
 | Outbound | `GET /api/outbound-messages` (Receipt و Status) |
 | Telegram | `GET/PUT/DELETE /api/settings/telegram`, `POST /api/settings/telegram/test` |
 | Tools | `GET /api/tools`, `PATCH /api/tools/{name}`, `POST .../{name}/invoke` |
