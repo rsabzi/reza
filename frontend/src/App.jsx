@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellRing,
   Bot,
@@ -14,16 +14,18 @@ import {
   RefreshCw,
   Scissors,
   Search,
+  ServerCrash,
   Settings2,
   ShieldCheck,
   Sparkles,
   Wrench,
   X,
+  XCircle,
 } from "lucide-react";
 import { api } from "./lib/api";
 import { cn } from "./lib/utils";
 import { ApprovalQueue } from "./components/ApprovalQueue";
-import { CompanionPanel } from "./components/CompanionPanel";
+import { FloatingCompanion } from "./components/FloatingCompanion";
 import {
   CommandPalette,
   NotificationPopover,
@@ -59,7 +61,6 @@ const skillNavigation = [
   { id: "personal", label: "پروژه‌های شخصی", icon: BriefcaseBusiness },
 ];
 const panelTitles = {
-  companion: "همراه من",
   overview: "نمای کلی",
   tasks: "تسک‌ها",
   detail: "جزئیات تسک",
@@ -87,8 +88,40 @@ const initialData = {
   health: false,
 };
 
+/** Section definitions for the initial dashboard sync, in stable order. */
+const dashboardSections = [
+  ["tasks", "تسک‌ها"],
+  ["approvals", "مرکز تأیید"],
+  ["memories", "حافظه"],
+  ["playbooks", "پلی‌بوک‌ها"],
+  ["tools", "ابزارها"],
+  ["salons", "سالن‌ها"],
+  ["salonPlan", "برنامه روزانه سالن‌ها"],
+  ["projects", "پروژه‌های شخصی"],
+  ["reminders", "یادآوری پروژه‌ها"],
+  ["system", "وضعیت سیستم"],
+  ["notifications", "اعلان‌ها"],
+];
+
+async function requestWithRetry(call, attempts = 2, delayMs = 650) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+function desktopCompanionDefault() {
+  if (typeof window === "undefined") return true;
+  if (typeof window.matchMedia !== "function") return true; // test env
+  return window.matchMedia("(min-width: 1024px)").matches;
+}
+
 export default function App() {
-  const [active, setActive] = useState("companion");
+  const [active, setActive] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -102,6 +135,18 @@ export default function App() {
   const [refreshInterval, setRefreshInterval] = useState(() =>
     Number(localStorage.getItem("agent-refresh-interval") || 0),
   );
+  const [companionOpen, setCompanionOpen] = useState(() => {
+    try {
+      const stored = localStorage.getItem("hamrah-companion-open");
+      if (stored !== null) return stored === "1";
+    } catch {
+      /* storage unavailable */
+    }
+    return desktopCompanionDefault();
+  });
+  const [loadErrors, setLoadErrors] = useState([]);
+  const [retrying, setRetrying] = useState(false);
+  const autoRetryCountRef = useRef(0);
 
   const notify = useCallback((message, type = "success") => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -136,36 +181,36 @@ export default function App() {
         setLoading(true);
         setSlowLoading(false);
       }
-      const requests = [
-        api.listTasks(),
-        api.listApprovals(),
-        api.listMemory(),
-        api.listPlaybooks(),
-        api.listTools(),
-        api.listSalons(),
-        api.dailySalonPlan(),
-        api.listProjects(),
-        api.reminders(),
-        api.systemStatus(),
-        api.getNotifications(),
+      const calls = [
+        api.listTasks,
+        api.listApprovals,
+        api.listMemory,
+        api.listPlaybooks,
+        api.listTools,
+        api.listSalons,
+        api.dailySalonPlan,
+        api.listProjects,
+        api.reminders,
+        api.systemStatus,
+        api.getNotifications,
       ];
-      const results = await Promise.allSettled(requests);
-      const keys = [
-        "tasks",
-        "approvals",
-        "memories",
-        "playbooks",
-        "tools",
-        "salons",
-        "salonPlan",
-        "projects",
-        "reminders",
-        "system",
-      ];
+      const results = await Promise.allSettled(
+        calls.map((call) => (silent ? requestWithRetry(call) : call())),
+      );
+      const errors = [];
       setData((current) => {
         const next = { ...current };
         results.forEach((result, index) => {
-          if (result.status === "fulfilled") next[keys[index]] = result.value;
+          const [key, label] = dashboardSections[index];
+          if (result.status === "fulfilled") {
+            next[key] = result.value;
+          } else {
+            errors.push({
+              key,
+              label,
+              message: result.reason?.message || "خطای ناشناخته",
+            });
+          }
         });
         next.health =
           results[9].status === "fulfilled" && results[9].value.api_ready;
@@ -177,12 +222,13 @@ export default function App() {
         }
         return next;
       });
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length)
+      setLoadErrors(errors);
+      if (errors.length) {
         notify(
-          `بارگذاری ${failures.length.toLocaleString("fa-IR")} بخش با خطا روبه‌رو شد`,
+          `بارگذاری ${errors.length.toLocaleString("fa-IR")} بخش با خطا روبه‌رو شد`,
           "error",
         );
+      }
       setLoading(false);
       setRefreshing(false);
     },
@@ -200,6 +246,25 @@ export default function App() {
     const timer = window.setTimeout(() => setSlowLoading(true), 5000);
     return () => window.clearTimeout(timer);
   }, [loading]);
+
+  // One automatic, silent recovery pass when every section failed at once
+  // (e.g. a transient proxy hiccup or a momentary backend restart).
+  useEffect(() => {
+    if (
+      loadErrors.length === 0 ||
+      loadErrors.length < dashboardSections.length ||
+      loading ||
+      autoRetryCountRef.current >= loadErrors.length
+    ) {
+      return undefined;
+    }
+    autoRetryCountRef.current = loadErrors.length;
+    const timer = window.setTimeout(() => {
+      setRetrying(true);
+      loadDashboard(true).finally(() => setRetrying(false));
+    }, 1600);
+    return () => window.clearTimeout(timer);
+  }, [loadErrors.length, loading, loadDashboard]);
   useEffect(() => {
     function openCommand(event) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -220,9 +285,13 @@ export default function App() {
   }, [refreshInterval, loadDashboard]);
 
   function navigate(panel) {
-    setActive(panel);
     setMenuOpen(false);
     setNotificationsOpen(false);
+    if (panel === "companion") {
+      setCompanionOpen(true);
+      return;
+    }
+    setActive(panel);
   }
 
   async function selectTask(taskOrId) {
@@ -356,15 +425,6 @@ export default function App() {
   );
 
   const panels = {
-    companion: (
-      <CompanionPanel
-        system={data.system}
-        approvals={data.approvals.length}
-        onNavigate={navigate}
-        onChanged={() => loadDashboard(true)}
-        notify={notify}
-      />
-    ),
     overview: (
       <OverviewDashboard
         data={data}
@@ -469,8 +529,10 @@ export default function App() {
   return (
     <div dir="rtl" className="min-h-screen">
       <div className="app-grid pointer-events-none fixed inset-0" />
+      <div className="app-noise pointer-events-none fixed inset-0 opacity-60" />
       <Sidebar
         active={active}
+        companionOpen={companionOpen}
         selectedTask={selectedTask}
         onNavigate={navigate}
         approvals={data.approvals.length}
@@ -488,6 +550,10 @@ export default function App() {
       <Topbar
         active={active}
         loading={refreshing}
+        companionOpen={companionOpen}
+        model={data.system?.reasoning_model}
+        companionOnline={Boolean(data.system?.gemini_configured)}
+        onCompanion={() => setCompanionOpen((value) => !value)}
         notificationCount={
           data.approvals.length +
           data.reminders.length +
@@ -504,8 +570,18 @@ export default function App() {
         onCloseNotifications={() => setNotificationsOpen(false)}
         onNavigate={navigate}
       />
-      <main className="relative px-4 pb-24 pt-6 sm:px-7 lg:mr-[264px] lg:pb-10 lg:pt-8">
+      <main className="relative px-4 pb-32 pt-6 sm:px-7 lg:mr-[264px] lg:pb-10 lg:pt-8">
         <div className="mx-auto max-w-[1320px]">
+          {!loading && loadErrors.length > 0 && (
+            <LoadDiagnostics
+              errors={loadErrors}
+              retrying={retrying}
+              onRetry={() => {
+                setRetrying(true);
+                loadDashboard(true).finally(() => setRetrying(false));
+              }}
+            />
+          )}
           {loading ? (
             <LoadingScreen slow={slowLoading} onRetry={() => loadDashboard()} />
           ) : (
@@ -518,6 +594,15 @@ export default function App() {
         active={active}
         approvals={data.approvals.length}
         onNavigate={navigate}
+      />
+      <FloatingCompanion
+        open={companionOpen}
+        onOpenChange={setCompanionOpen}
+        system={data.system}
+        approvals={data.approvals.length}
+        onNavigate={navigate}
+        notify={notify}
+        onChanged={() => loadDashboard(true)}
       />
       <CommandPalette
         open={searchOpen}
@@ -540,6 +625,7 @@ export default function App() {
 
 function Sidebar({
   active,
+  companionOpen,
   selectedTask,
   onNavigate,
   approvals,
@@ -550,25 +636,26 @@ function Sidebar({
   return (
     <aside
       className={cn(
-        "fixed inset-y-0 right-0 z-40 flex w-[278px] flex-col overflow-hidden border-l border-line/75 bg-[#090d15]/96 shadow-2xl backdrop-blur-xl transition-transform lg:w-[264px] lg:translate-x-0",
+        "fixed inset-y-0 right-0 z-40 flex w-[278px] flex-col overflow-hidden border-l border-line/75 bg-[#070a12]/95 shadow-2xl backdrop-blur-2xl transition-transform lg:w-[264px] lg:translate-x-0",
         open ? "translate-x-0" : "translate-x-full",
       )}
       aria-label="ناوبری اصلی"
     >
-      <div className="flex h-[76px] shrink-0 items-center justify-between border-b border-line/50 px-5">
+      <div className="pointer-events-none absolute -top-28 right-[-4rem] h-56 w-64 rounded-full bg-primary/[.13] blur-[80px]" />
+      <div className="relative flex h-[76px] shrink-0 items-center justify-between border-b border-line/50 px-5">
         <button
           onClick={() => onNavigate("companion")}
-          className="flex items-center gap-3 text-right"
+          className="group flex items-center gap-3 text-right"
         >
-          <span className="relative grid size-10 place-items-center rounded-[14px] bg-gradient-to-br from-[#9178ff] to-[#5d3bdb] text-white shadow-[0_10px_35px_rgba(124,92,255,.32)]">
+          <span className="relative grid size-10 place-items-center rounded-[14px] bg-gradient-to-br from-[#9d85ff] via-[#7c5cff] to-[#5b21b6] text-white shadow-[0_10px_35px_rgba(124,92,255,.35)] transition group-hover:shadow-[0_10px_42px_rgba(124,92,255,.5)]">
             <Sparkles size={18} />
-            <span className="absolute -left-0.5 -top-0.5 size-2.5 rounded-full border-2 border-[#090d15] bg-mint" />
+            <span className="absolute -left-0.5 -top-0.5 size-2.5 rounded-full border-2 border-[#070a12] bg-mint" />
           </span>
           <span>
             <strong className="block text-[17px] tracking-tight text-white">
               همراه
             </strong>
-            <span className="text-[9px] font-medium tracking-[.18em] text-slate-700">
+            <span className="text-[9px] font-medium text-slate-600">
               PERSONAL AGENT
             </span>
           </span>
@@ -585,25 +672,29 @@ function Sidebar({
       </div>
 
       <div
-        className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-3.5 py-4"
+        className="no-scrollbar relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3.5 py-4"
         data-testid="mobile-menu-scroll-area"
       >
-        <p className="mb-2 px-3 text-[9px] font-bold tracking-[.15em] text-slate-700">
+        <p className="mb-2 px-3 text-[9px] font-semibold text-slate-600">
           فضای کار
         </p>
         <nav className="space-y-1">
-          {coreNavigation.map((item) => (
-            <NavItem
-              key={item.id}
-              {...item}
-              active={
-                active === item.id ||
-                (item.id === "tasks" && active === "detail")
-              }
-              count={item.badge ? approvals : 0}
-              onClick={() => onNavigate(item.id)}
-            />
-          ))}
+          {coreNavigation.map((item) => {
+            const isActive =
+              item.id === "companion"
+                ? companionOpen
+                : active === item.id ||
+                  (item.id === "tasks" && active === "detail");
+            return (
+              <NavItem
+                key={item.id}
+                {...item}
+                active={isActive}
+                count={item.badge ? approvals : 0}
+                onClick={() => onNavigate(item.id)}
+              />
+            );
+          })}
         </nav>
         {selectedTask && active === "detail" && (
           <button
@@ -615,7 +706,7 @@ function Sidebar({
           </button>
         )}
 
-        <p className="mb-2 mt-6 px-3 text-[9px] font-bold tracking-[.15em] text-slate-700">
+        <p className="mb-2 mt-6 px-3 text-[9px] font-semibold text-slate-600">
           مهارت‌های تخصصی
         </p>
         <nav className="space-y-1">
@@ -630,7 +721,7 @@ function Sidebar({
         </nav>
       </div>
 
-      <div className="shrink-0 space-y-2 border-t border-line/60 bg-[#090d15] px-3.5 pb-3.5 pt-3">
+      <div className="relative shrink-0 space-y-2 border-t border-line/60 bg-black/20 px-3.5 pb-3.5 pt-3">
         <NavItem
           id="settings"
           label="تنظیمات و سیستم"
@@ -644,9 +735,17 @@ function Sidebar({
         >
           <div className="flex items-center gap-2.5">
             <span
-              className={`grid size-8 place-items-center rounded-lg ${system.api_ready ? "bg-emerald-400/[.08] text-emerald-300" : "bg-amber-400/[.08] text-amber-300"}`}
+              className={`relative grid size-8 place-items-center rounded-lg ${system.api_ready ? "bg-emerald-400/[.08] text-emerald-300" : "bg-amber-400/[.08] text-amber-300"}`}
             >
               <Bot size={15} />
+              <span
+                className={cn(
+                  "absolute -left-0.5 -top-0.5 size-2 rounded-full border-2 border-[#0a0e18]",
+                  system.api_ready
+                    ? "animate-pulse-soft bg-emerald-400"
+                    : "bg-amber-400",
+                )}
+              />
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-medium text-slate-300">
@@ -679,20 +778,28 @@ function NavItem({ label, icon: Icon, active, count = 0, onClick }) {
     <button
       onClick={onClick}
       className={cn(
-        "group flex h-10 w-full items-center gap-3 rounded-xl px-3 text-xs transition",
+        "group relative flex h-10 w-full items-center gap-3 rounded-xl px-3 text-xs transition",
         active
-          ? "bg-primary/[.10] text-violet-100 ring-1 ring-inset ring-primary/15"
+          ? "bg-gradient-to-l from-primary/[.14] to-primary/[.04] text-violet-100 ring-1 ring-inset ring-primary/20"
           : "text-slate-500 hover:bg-white/[.035] hover:text-slate-300",
       )}
     >
+      {active && (
+        <span className="absolute inset-y-2 right-0 w-[3px] rounded-full bg-gradient-to-b from-primary-soft to-primary" />
+      )}
       <Icon
         size={16}
         strokeWidth={active ? 2.2 : 1.8}
-        className={active ? "text-primary-soft" : "text-slate-650"}
+        className={cn(
+          "transition",
+          active
+            ? "text-primary-soft"
+            : "text-slate-600 group-hover:text-slate-500",
+        )}
       />
       <span className="flex-1 text-right">{label}</span>
       {count > 0 && (
-        <span className="grid min-w-5 place-items-center rounded-full bg-primary px-1.5 py-0.5 text-[9px] text-white">
+        <span className="grid min-w-5 place-items-center rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold text-white shadow-[0_4px_14px_rgba(139,92,246,.4)]">
           {count.toLocaleString("fa-IR")}
         </span>
       )}
@@ -704,6 +811,10 @@ function NavItem({ label, icon: Icon, active, count = 0, onClick }) {
 function Topbar({
   active,
   loading,
+  companionOpen,
+  model,
+  companionOnline,
+  onCompanion,
   notificationCount,
   notificationsOpen,
   serverNotifications = [],
@@ -722,7 +833,7 @@ function Topbar({
     month: "long",
   }).format(new Date());
   return (
-    <header className="sticky top-0 z-20 flex h-[70px] items-center justify-between border-b border-line/65 bg-background/78 px-4 backdrop-blur-xl sm:px-7 lg:mr-[264px]">
+    <header className="sticky top-0 z-20 flex h-[70px] items-center justify-between border-b border-line/65 bg-background/72 px-4 backdrop-blur-xl sm:px-7 lg:mr-[264px]">
       <div className="flex min-w-0 items-center gap-3">
         <Button
           variant="secondary"
@@ -735,14 +846,45 @@ function Topbar({
         </Button>
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-slate-200">
-            {panelTitles[active]}
+            {panelTitles[active] || "نمای کلی"}
           </p>
-          <p className="mt-1 hidden text-[9px] text-slate-650 sm:block">
+          <p className="mt-1 hidden text-[9px] text-slate-600 sm:block">
             {date}
           </p>
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <button
+          onClick={onCompanion}
+          data-testid="topbar-companion-pill"
+          className={cn(
+            "hidden h-10 items-center gap-2 rounded-xl border px-3 text-right text-[10.5px] transition md:flex",
+            companionOpen
+              ? "border-primary/30 bg-primary/[.08] text-primary-soft"
+              : "border-line bg-surface/70 text-slate-400 hover:border-slate-600 hover:text-slate-200",
+          )}
+        >
+          <span className="relative grid size-6 place-items-center rounded-lg">
+            <span className="hamrah-orb grid size-6 place-items-center text-white">
+              <Bot size={12} />
+            </span>
+          </span>
+          <span className="font-semibold">همـراه</span>
+          <span
+            className={cn(
+              "flex items-center gap-1 text-[9px]",
+              companionOnline ? "text-emerald-300" : "text-amber-300",
+            )}
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                companionOnline ? "bg-emerald-400" : "bg-amber-400",
+              )}
+            />
+            {companionOnline ? model || "آنلاین" : "آفلاین"}
+          </span>
+        </button>
         <button
           onClick={onSearch}
           className="hidden h-10 w-64 items-center gap-2 rounded-xl border border-line bg-surface/70 px-3 text-right text-xs text-slate-600 transition hover:border-slate-600 hover:text-slate-400 md:flex"
@@ -751,7 +893,7 @@ function Topbar({
           <span className="flex-1">جستجوی سراسری…</span>
           <span
             dir="ltr"
-            className="rounded border border-line px-1.5 py-0.5 text-[9px]"
+            className="rounded border border-line bg-white/[.02] px-1.5 py-0.5 text-[9px]"
           >
             ⌘ K
           </span>
@@ -822,7 +964,7 @@ function MobileNav({ active, approvals, onNavigate, hidden = false }) {
   return (
     <nav
       data-testid="mobile-bottom-nav"
-      className="fixed inset-x-3 bottom-3 z-30 flex h-16 items-center justify-around rounded-2xl border border-line bg-[#0b1019]/95 px-2 shadow-popover backdrop-blur-xl lg:hidden"
+      className="fixed inset-x-3 bottom-3 z-30 flex h-16 items-center justify-around rounded-2xl border border-line bg-[#0a0e18]/95 px-2 shadow-popover backdrop-blur-xl lg:hidden"
     >
       {items.map((item) => {
         const Icon = item.icon;
@@ -850,14 +992,20 @@ function LoadingScreen({ slow, onRetry }) {
   return (
     <div className="grid min-h-[68vh] place-items-center">
       <div className="max-w-sm text-center">
-        <span className="relative mx-auto grid size-16 place-items-center rounded-2xl border border-primary/15 bg-primary/[.06] text-primary-soft">
-          <CircleGauge className="animate-spin" size={25} />
-          <span className="absolute inset-0 animate-pulse-soft rounded-2xl ring-1 ring-primary/20" />
+        <span className="relative mx-auto grid size-16 place-items-center">
+          <span className="absolute inset-0 rounded-full border-2 border-primary/15" />
+          <span className="absolute inset-0 animate-ping rounded-full border border-primary/20 [animation-duration:2.2s]" />
+          <span className="hamrah-orb hamrah-orb--idle grid size-14 place-items-center text-white">
+            <CircleGauge
+              size={24}
+              className="animate-spin [animation-duration:3s]"
+            />
+          </span>
         </span>
-        <p className="mt-4 text-sm font-medium text-slate-400">
+        <p className="mt-5 text-sm font-medium text-slate-400">
           در حال همگام‌سازی همراه
         </p>
-        <p className="mt-1 text-[10px] text-slate-700">
+        <p className="mt-1 text-[10px] text-slate-600">
           تسک‌ها، حافظه و ماژول‌ها
         </p>
         {slow && (
@@ -879,6 +1027,58 @@ function LoadingScreen({ slow, onRetry }) {
             </Button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function LoadDiagnostics({ errors, retrying, onRetry }) {
+  return (
+    <div
+      data-testid="load-diagnostics"
+      className="mb-6 animate-slide-up overflow-hidden rounded-2xl border border-rose-400/20 bg-rose-400/[.05]"
+    >
+      <div className="h-px w-full bg-gradient-to-l from-rose-400/60 to-transparent" />
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-rose-400/10 text-rose-300">
+          <ServerCrash size={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-rose-100">
+            {errors.length.toLocaleString("fa-IR")} بخش از داشبورد بارگذاری نشد
+          </p>
+          <p className="mt-1 text-[11px] leading-6 text-slate-500">
+            هستهٔ همراه سالم است؛ ارتباط مرورگر با سرور در این درخواست‌ها برقرار
+            نشد.{" "}
+            {retrying
+              ? "در حال تلاش مجدد خودکار…"
+              : "در صورت تداوم، سرور را بررسی و دوباره تلاش کنید."}
+          </p>
+          <ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
+            {errors.map((item) => (
+              <li
+                key={item.key}
+                className="flex min-w-0 items-start gap-2 text-[11px]"
+              >
+                <XCircle size={12} className="mt-1 shrink-0 text-rose-300/70" />
+                <span className="shrink-0 text-slate-300">{item.label}</span>
+                <span className="truncate text-slate-600" title={item.message}>
+                  — {item.message}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-4"
+            onClick={onRetry}
+            disabled={retrying}
+          >
+            <RefreshCw size={13} className={retrying ? "animate-spin" : ""} />
+            تلاش دوباره
+          </Button>
+        </div>
       </div>
     </div>
   );

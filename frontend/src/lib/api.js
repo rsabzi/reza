@@ -11,14 +11,17 @@ function readableError(body, status) {
 }
 
 export async function request(path, options = {}) {
-  const { timeout = 12000, ...fetchOptions } = options;
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeout);
+  const { timeout = 12000, signal, ...fetchOptions } = options;
+  let controller = null;
+  const timeoutId = signal
+    ? null
+    : window.setTimeout(() => controller?.abort(), timeout);
+  if (!signal) controller = new AbortController();
   let response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...fetchOptions,
-      signal: controller.signal,
+      signal: signal || controller.signal,
       headers: {
         ...(fetchOptions.body ? { "Content-Type": "application/json" } : {}),
         ...fetchOptions.headers,
@@ -26,15 +29,21 @@ export async function request(path, options = {}) {
     });
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error(
-        "پاسخ Backend بیش از حد طول کشید. اتصال را بررسی و دوباره تلاش کنید.",
+      const external = Boolean(signal?.aborted);
+      const aborted = new Error(
+        external
+          ? "تولید پاسخ متوقف شد."
+          : "پاسخ Backend بیش از حد طول کشید. اتصال را بررسی و دوباره تلاش کنید.",
       );
+      aborted.isAbort = true;
+      aborted.external = external;
+      throw aborted;
     }
     throw new Error(
       "ارتباط با هسته همراه برقرار نشد. وضعیت سرور را بررسی کنید.",
     );
   } finally {
-    window.clearTimeout(timeoutId);
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
   }
 
   if (!response.ok) {
@@ -85,8 +94,8 @@ export const api = {
   setReminderWindow: (days) =>
     request("/settings/reminder-window", json("PUT", { days })),
 
-  assistantChat: (payload) =>
-    request("/assistant/chat", json("POST", payload, 180000)),
+  assistantChat: (payload, signal) =>
+    request("/assistant/chat", { ...json("POST", payload, 180000), signal }),
   previewTool: (name, args = {}) =>
     request(`/tools/${name}/preview`, json("POST", { arguments: args }, 30000)),
   getDailyPlan: () => request("/daily/plan"),
