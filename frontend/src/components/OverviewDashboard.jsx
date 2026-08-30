@@ -97,10 +97,16 @@ export function OverviewDashboard({
           </span>
         }
         action={
-          <Button onClick={() => onNavigate("tasks")}>
-            <Sparkles size={16} />
-            ثبت درخواست جدید
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => onNavigate("companion")}>
+              <Sparkles size={16} />
+              گفتگو با همـراه
+            </Button>
+            <Button variant="secondary" onClick={() => onNavigate("tasks")}>
+              <ListTodo size={15} />
+              ثبت درخواست جدید
+            </Button>
+          </div>
         }
       />
 

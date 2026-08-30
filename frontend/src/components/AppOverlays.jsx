@@ -282,16 +282,36 @@ export function NotificationPopover({
 export function ToastStack({ toasts, onDismiss }) {
   return (
     <div
-      className="fixed bottom-4 left-4 z-[100] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2"
+      className="fixed bottom-4 right-4 z-[100] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2 lg:right-[282px]"
       aria-live="polite"
     >
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`flex animate-slide-up items-start gap-3 rounded-xl border p-3.5 shadow-popover backdrop-blur-xl ${toast.type === "error" ? "border-rose-400/20 bg-[#241218]/95 text-rose-200" : "border-emerald-400/20 bg-[#0d211d]/95 text-emerald-200"}`}
+          className={`animate-pop-in relative flex items-start gap-3 overflow-hidden rounded-2xl border p-3.5 shadow-popover backdrop-blur-xl ${
+            toast.type === "error"
+              ? "border-rose-400/25 bg-[#22101a]/95 text-rose-100"
+              : "border-emerald-400/25 bg-[#0a1c1a]/95 text-emerald-50"
+          }`}
         >
           <span
-            className={`mt-0.5 grid size-6 shrink-0 place-items-center rounded-full ${toast.type === "error" ? "bg-rose-400/10" : "bg-emerald-400/10"}`}
+            className={`pointer-events-none absolute inset-x-0 top-0 h-px ${
+              toast.type === "error"
+                ? "bg-gradient-to-l from-rose-400/80 to-transparent"
+                : "bg-gradient-to-l from-emerald-300/80 to-transparent"
+            }`}
+          />
+          <span
+            className={`toast-progress pointer-events-none absolute bottom-0 right-0 h-[2px] rounded-full ${
+              toast.type === "error" ? "bg-rose-400/70" : "bg-emerald-300/70"
+            }`}
+          />
+          <span
+            className={`mt-0.5 grid size-6 shrink-0 place-items-center rounded-full ${
+              toast.type === "error"
+                ? "bg-rose-400/15 text-rose-300"
+                : "bg-emerald-400/15 text-emerald-300"
+            }`}
           >
             {toast.type === "error" ? (
               <X size={13} />
@@ -302,7 +322,8 @@ export function ToastStack({ toasts, onDismiss }) {
           <p className="flex-1 text-xs leading-6">{toast.message}</p>
           <button
             onClick={() => onDismiss(toast.id)}
-            className="text-current opacity-50 hover:opacity-100"
+            className="text-current opacity-50 transition hover:opacity-100"
+            aria-label="بستن اعلان"
           >
             <X size={13} />
           </button>

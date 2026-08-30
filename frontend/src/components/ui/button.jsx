@@ -3,16 +3,16 @@ import { cn } from "../../lib/utils";
 
 const variants = {
   primary:
-    "bg-primary text-white shadow-[0_10px_30px_rgba(124,92,255,.24)] hover:bg-primary-dark hover:-translate-y-px",
+    "border border-primary-soft/25 bg-gradient-to-b from-[#8f6bfa] to-[#6d3ff0] text-white shadow-[0_10px_30px_rgba(124,92,255,.28),inset_0_1px_0_rgba(255,255,255,.18)] hover:from-[#9a78ff] hover:to-[#7747fb] hover:shadow-[0_14px_38px_rgba(124,92,255,.38),inset_0_1px_0_rgba(255,255,255,.22)] active:translate-y-px",
   secondary:
-    "border border-line bg-elevated/70 text-slate-200 hover:border-slate-600 hover:bg-elevated",
+    "border border-line bg-elevated/70 text-slate-200 hover:border-slate-600 hover:bg-elevated active:translate-y-px",
   outline:
-    "border border-primary/25 bg-primary/[.06] text-primary-soft hover:bg-primary/[.12]",
+    "border border-primary/25 bg-primary/[.06] text-primary-soft hover:bg-primary/[.12] active:translate-y-px",
   ghost: "text-slate-400 hover:bg-white/[.055] hover:text-white",
   danger:
-    "border border-rose-500/20 bg-rose-500/10 text-rose-300 hover:bg-rose-500/18",
+    "border border-rose-500/20 bg-rose-500/10 text-rose-300 hover:bg-rose-500/18 active:translate-y-px",
   success:
-    "border border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/18",
+    "border border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/18 active:translate-y-px",
 };
 const sizes = {
   xs: "h-8 rounded-lg px-2.5 text-[11px]",

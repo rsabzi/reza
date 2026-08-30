@@ -114,20 +114,31 @@ export function DailyPlanCard({ notify = () => {}, onChanged = () => {} }) {
       </Card>
     );
   }
-  if (!plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
     return (
       <Card data-testid="daily-plan-card">
         <CardContent>
           <p className="flex items-center gap-2 py-4 text-xs text-slate-500">
-            <Loader2 size={14} className="animate-spin" /> در حال بارگذاری
-            برنامه روزانه…
+            {plan ? (
+              "داده‌های برنامه روزانه هنوز آماده نیست."
+            ) : (
+              <>
+                <Loader2 size={14} className="animate-spin" /> در حال بارگذاری
+                برنامه روزانه…
+              </>
+            )}
           </p>
         </CardContent>
       </Card>
     );
   }
 
-  const { settings, today, unscheduled_count: unscheduled } = plan;
+  const {
+    settings = {},
+    today = [],
+    unscheduled_count: unscheduled = 0,
+  } = plan;
+  const timezone = settings.timezone || "—";
 
   return (
     <Card data-testid="daily-plan-card">
@@ -139,7 +150,7 @@ export function DailyPlanCard({ notify = () => {}, onChanged = () => {} }) {
               برنامه تحویل روزانه
             </h2>
             <p className="mt-1 text-[10px] text-slate-600">
-              هر روز یک تسک، یادآوری صبح و گزارش شبانه ({settings.timezone})
+              هر روز یک تسک، یادآوری صبح و گزارش شبانه ({timezone})
             </p>
           </div>
           <label className="flex cursor-pointer items-center gap-2 text-[10px] text-slate-400">
