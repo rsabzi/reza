@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellRing,
   Bot,
@@ -14,11 +14,13 @@ import {
   RefreshCw,
   Scissors,
   Search,
+  ServerCrash,
   Settings2,
   ShieldCheck,
   Sparkles,
   Wrench,
   X,
+  XCircle,
 } from "lucide-react";
 import { api } from "./lib/api";
 import { cn } from "./lib/utils";
@@ -86,6 +88,32 @@ const initialData = {
   health: false,
 };
 
+/** Section definitions for the initial dashboard sync, in stable order. */
+const dashboardSections = [
+  ["tasks", "تسک‌ها"],
+  ["approvals", "مرکز تأیید"],
+  ["memories", "حافظه"],
+  ["playbooks", "پلی‌بوک‌ها"],
+  ["tools", "ابزارها"],
+  ["salons", "سالن‌ها"],
+  ["salonPlan", "برنامه روزانه سالن‌ها"],
+  ["projects", "پروژه‌های شخصی"],
+  ["reminders", "یادآوری پروژه‌ها"],
+  ["system", "وضعیت سیستم"],
+  ["notifications", "اعلان‌ها"],
+];
+
+async function requestWithRetry(call, attempts = 2, delayMs = 650) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 function desktopCompanionDefault() {
   if (typeof window === "undefined") return true;
   if (typeof window.matchMedia !== "function") return true; // test env
@@ -116,6 +144,9 @@ export default function App() {
     }
     return desktopCompanionDefault();
   });
+  const [loadErrors, setLoadErrors] = useState([]);
+  const [retrying, setRetrying] = useState(false);
+  const autoRetryCountRef = useRef(0);
 
   const notify = useCallback((message, type = "success") => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -150,36 +181,36 @@ export default function App() {
         setLoading(true);
         setSlowLoading(false);
       }
-      const requests = [
-        api.listTasks(),
-        api.listApprovals(),
-        api.listMemory(),
-        api.listPlaybooks(),
-        api.listTools(),
-        api.listSalons(),
-        api.dailySalonPlan(),
-        api.listProjects(),
-        api.reminders(),
-        api.systemStatus(),
-        api.getNotifications(),
+      const calls = [
+        api.listTasks,
+        api.listApprovals,
+        api.listMemory,
+        api.listPlaybooks,
+        api.listTools,
+        api.listSalons,
+        api.dailySalonPlan,
+        api.listProjects,
+        api.reminders,
+        api.systemStatus,
+        api.getNotifications,
       ];
-      const results = await Promise.allSettled(requests);
-      const keys = [
-        "tasks",
-        "approvals",
-        "memories",
-        "playbooks",
-        "tools",
-        "salons",
-        "salonPlan",
-        "projects",
-        "reminders",
-        "system",
-      ];
+      const results = await Promise.allSettled(
+        calls.map((call) => (silent ? requestWithRetry(call) : call())),
+      );
+      const errors = [];
       setData((current) => {
         const next = { ...current };
         results.forEach((result, index) => {
-          if (result.status === "fulfilled") next[keys[index]] = result.value;
+          const [key, label] = dashboardSections[index];
+          if (result.status === "fulfilled") {
+            next[key] = result.value;
+          } else {
+            errors.push({
+              key,
+              label,
+              message: result.reason?.message || "خطای ناشناخته",
+            });
+          }
         });
         next.health =
           results[9].status === "fulfilled" && results[9].value.api_ready;
@@ -191,12 +222,13 @@ export default function App() {
         }
         return next;
       });
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length)
+      setLoadErrors(errors);
+      if (errors.length) {
         notify(
-          `بارگذاری ${failures.length.toLocaleString("fa-IR")} بخش با خطا روبه‌رو شد`,
+          `بارگذاری ${errors.length.toLocaleString("fa-IR")} بخش با خطا روبه‌رو شد`,
           "error",
         );
+      }
       setLoading(false);
       setRefreshing(false);
     },
@@ -214,6 +246,25 @@ export default function App() {
     const timer = window.setTimeout(() => setSlowLoading(true), 5000);
     return () => window.clearTimeout(timer);
   }, [loading]);
+
+  // One automatic, silent recovery pass when every section failed at once
+  // (e.g. a transient proxy hiccup or a momentary backend restart).
+  useEffect(() => {
+    if (
+      loadErrors.length === 0 ||
+      loadErrors.length < dashboardSections.length ||
+      loading ||
+      autoRetryCountRef.current >= loadErrors.length
+    ) {
+      return undefined;
+    }
+    autoRetryCountRef.current = loadErrors.length;
+    const timer = window.setTimeout(() => {
+      setRetrying(true);
+      loadDashboard(true).finally(() => setRetrying(false));
+    }, 1600);
+    return () => window.clearTimeout(timer);
+  }, [loadErrors.length, loading, loadDashboard]);
   useEffect(() => {
     function openCommand(event) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -521,6 +572,16 @@ export default function App() {
       />
       <main className="relative px-4 pb-32 pt-6 sm:px-7 lg:mr-[264px] lg:pb-10 lg:pt-8">
         <div className="mx-auto max-w-[1320px]">
+          {!loading && loadErrors.length > 0 && (
+            <LoadDiagnostics
+              errors={loadErrors}
+              retrying={retrying}
+              onRetry={() => {
+                setRetrying(true);
+                loadDashboard(true).finally(() => setRetrying(false));
+              }}
+            />
+          )}
           {loading ? (
             <LoadingScreen slow={slowLoading} onRetry={() => loadDashboard()} />
           ) : (
@@ -731,7 +792,9 @@ function NavItem({ label, icon: Icon, active, count = 0, onClick }) {
         strokeWidth={active ? 2.2 : 1.8}
         className={cn(
           "transition",
-          active ? "text-primary-soft" : "text-slate-600 group-hover:text-slate-500",
+          active
+            ? "text-primary-soft"
+            : "text-slate-600 group-hover:text-slate-500",
         )}
       />
       <span className="flex-1 text-right">{label}</span>
@@ -819,7 +882,7 @@ function Topbar({
                 companionOnline ? "bg-emerald-400" : "bg-amber-400",
               )}
             />
-            {companionOnline ? (model || "آنلاین") : "آفلاین"}
+            {companionOnline ? model || "آنلاین" : "آفلاین"}
           </span>
         </button>
         <button
@@ -933,7 +996,10 @@ function LoadingScreen({ slow, onRetry }) {
           <span className="absolute inset-0 rounded-full border-2 border-primary/15" />
           <span className="absolute inset-0 animate-ping rounded-full border border-primary/20 [animation-duration:2.2s]" />
           <span className="hamrah-orb hamrah-orb--idle grid size-14 place-items-center text-white">
-            <CircleGauge size={24} className="animate-spin [animation-duration:3s]" />
+            <CircleGauge
+              size={24}
+              className="animate-spin [animation-duration:3s]"
+            />
           </span>
         </span>
         <p className="mt-5 text-sm font-medium text-slate-400">
@@ -961,6 +1027,58 @@ function LoadingScreen({ slow, onRetry }) {
             </Button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function LoadDiagnostics({ errors, retrying, onRetry }) {
+  return (
+    <div
+      data-testid="load-diagnostics"
+      className="mb-6 animate-slide-up overflow-hidden rounded-2xl border border-rose-400/20 bg-rose-400/[.05]"
+    >
+      <div className="h-px w-full bg-gradient-to-l from-rose-400/60 to-transparent" />
+      <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-rose-400/10 text-rose-300">
+          <ServerCrash size={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-rose-100">
+            {errors.length.toLocaleString("fa-IR")} بخش از داشبورد بارگذاری نشد
+          </p>
+          <p className="mt-1 text-[11px] leading-6 text-slate-500">
+            هستهٔ همراه سالم است؛ ارتباط مرورگر با سرور در این درخواست‌ها برقرار
+            نشد.{" "}
+            {retrying
+              ? "در حال تلاش مجدد خودکار…"
+              : "در صورت تداوم، سرور را بررسی و دوباره تلاش کنید."}
+          </p>
+          <ul className="mt-3 grid gap-1.5 sm:grid-cols-2">
+            {errors.map((item) => (
+              <li
+                key={item.key}
+                className="flex min-w-0 items-start gap-2 text-[11px]"
+              >
+                <XCircle size={12} className="mt-1 shrink-0 text-rose-300/70" />
+                <span className="shrink-0 text-slate-300">{item.label}</span>
+                <span className="truncate text-slate-600" title={item.message}>
+                  — {item.message}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-4"
+            onClick={onRetry}
+            disabled={retrying}
+          >
+            <RefreshCw size={13} className={retrying ? "animate-spin" : ""} />
+            تلاش دوباره
+          </Button>
+        </div>
       </div>
     </div>
   );
